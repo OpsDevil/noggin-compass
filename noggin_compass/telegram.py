@@ -30,8 +30,13 @@ RETRY_DELAY = 10
 
 @dataclass
 class Photo:
-    jpeg: bytes
+    image: bytes  # JPEG or PNG, as the file name says
     caption: str = ""
+    filename: str = "frame.jpg"
+
+    @property
+    def content_type(self) -> str:
+        return "image/png" if self.filename.endswith(".png") else "image/jpeg"
 
 
 def resolve_credentials(token: str | None, chat_ids: list[int]) -> tuple[str | None, list[int]]:
@@ -80,8 +85,8 @@ class TelegramBot:
             for name, value in (("chat_id", chat), ("caption", photo.caption))
         ]
         parts.append(
-            f'--{boundary}\r\nContent-Disposition: form-data; name="photo"; filename="frame.jpg"\r\n'
-            "Content-Type: image/jpeg\r\n\r\n".encode() + photo.jpeg + b"\r\n"
+            f'--{boundary}\r\nContent-Disposition: form-data; name="photo"; filename="{photo.filename}"\r\n'
+            f"Content-Type: {photo.content_type}\r\n\r\n".encode() + photo.image + b"\r\n"
         )
         parts.append(f"--{boundary}--\r\n".encode())
         try:

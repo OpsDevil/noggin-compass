@@ -71,6 +71,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "cli.help.days": "how many recent days (default: 7)",
         "cli.help.date": "a single day, e.g. 2026-10-29",
         "cli.help.timelines": "for how many recent days to show details and the timeline",
+        "cli.help.chart": "also save a chart of the last day as a PNG file",
+        "cli.chart_saved": "Chart saved to {path}",
         "cli.no_config_file": "config file {path} not found",
         "cli.defaults": "config.yaml not found, using defaults (the Mac's built-in camera)",
         "cli.started": "Source: {source}, analysing {fps:.1f} frames/s. Stop with Ctrl+C{quit}",
@@ -88,6 +90,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "/now - where the head is now and whether it is time to turn\n"
             "/stats - time per side today\n"
             "/sleep - sleep today\n"
+            "/chart - a chart: time per side, when, and left versus right per day\n"
             "/photo - a picture from the camera right now\n"
             "/marked - the same picture with what the program detected\n"
             "Turn alerts arrive here by themselves."
@@ -126,6 +129,13 @@ MESSAGES: dict[str, dict[str, str]] = {
         "bot.now_asleep": "Asleep for {duration}, since {since}.",
         "bot.now_awake": "Not asleep right now.",
         "bot.stats_sleep": "sleep {total}, sleeps: {count}",
+        "chart.title": "Head, day {date} from {start}",
+        "chart.timeline": "When",
+        "chart.head": "head",
+        "chart.sleep": "sleep",
+        "chart.days": "{left} and {right} per day",
+        "bot.cmd.chart": "chart of the day",
+        "bot.chart_caption": "Data as of {time}",
         "tg.started": "Telegram: alerts and commands for {count} chat(s)",
         "tg.unknown_chat": (
             "Telegram: ignored a message from chat {chat}. To allow it, add {chat} to "
@@ -204,6 +214,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "cli.help.days": "за сколько последних суток (по умолчанию 7)",
         "cli.help.date": "одни конкретные сутки, напр. 2026-10-29",
         "cli.help.timelines": "для скольких последних суток показать подробности и хронологию",
+        "cli.help.chart": "ещё сохранить график за последние сутки в PNG-файл",
+        "cli.chart_saved": "График сохранён в {path}",
         "cli.no_config_file": "нет файла настроек {path}",
         "cli.defaults": "config.yaml не найден, использую настройки по умолчанию (встроенная камера Mac)",
         "cli.started": "Источник: {source}, анализ {fps:.1f} кадр/с. Остановить - Ctrl+C{quit}",
@@ -220,6 +232,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "/now - где сейчас голова и не пора ли поворачивать\n"
             "/stats - время по сторонам за сегодня\n"
             "/sleep - сон за сегодня\n"
+            "/chart - график: время по сторонам, когда и влево/вправо по суткам\n"
             "/photo - снимок с камеры прямо сейчас\n"
             "/marked - тот же снимок с тем, что нашла программа\n"
             "Сигналы \"пора повернуть\" приходят сюда сами."
@@ -258,6 +271,13 @@ MESSAGES: dict[str, dict[str, str]] = {
         "bot.now_asleep": "Спит уже {duration}, с {since}.",
         "bot.now_awake": "Сейчас не спит.",
         "bot.stats_sleep": "сон {total}, засыпаний: {count}",
+        "chart.title": "Голова, сутки {date} с {start}",
+        "chart.timeline": "Когда",
+        "chart.head": "голова",
+        "chart.sleep": "сон",
+        "chart.days": "{left} и {right} по суткам",
+        "bot.cmd.chart": "график за сутки",
+        "bot.chart_caption": "Данные на {time}",
         "tg.started": "Telegram: сигналы и команды для чатов: {count}",
         "tg.unknown_chat": (
             "Telegram: сообщение из чата {chat} пропущено. Чтобы разрешить его, добавьте {chat} в "

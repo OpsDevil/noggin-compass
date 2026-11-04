@@ -181,6 +181,7 @@ uv run noggin-compass [--config FILE] [--lang en|ru] report [options]
 | `--days N` | How many recent days to show. Default: 7. |
 | `--date DATE` | Show one particular day, e.g. `2026-11-04`. |
 | `--timelines N` | For how many of the last days to print details and the timeline. Default: 1. |
+| `--chart FILE` | Also save a chart of the last day as a PNG: time per side, a timeline of the head and sleep, left versus right per day. |
 
 A report day runs from noon to noon, so a whole night lands in one day. In the timeline every row
 is an hour and every character a minute: `L` left, `R` right, `·` straight, `?` face not visible,
@@ -210,8 +211,8 @@ computer running the program (macOS) and is repeated every `alerts.repeat_minute
 stays on that side. The numbers above are an example; agree on the limits with your paediatrician.
 
 **Telegram.** Alerts can also go to Telegram, and the bot answers `/now` (where the head is,
-whether it is time to turn and whether the baby is asleep), `/stats` (time per side today) and
-`/sleep` (sleep today, see [Sleep](#sleep)):
+whether it is time to turn and whether the baby is asleep), `/stats` (time per side today),
+`/sleep` (sleep today, see [Sleep](#sleep)) and `/chart` (the same chart as `report --chart`):
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and store its token in the macOS Keychain
    (the command asks for the token and does not echo it):

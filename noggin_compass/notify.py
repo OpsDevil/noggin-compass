@@ -14,6 +14,7 @@ import cv2
 import numpy as np
 
 from .balance import Alert, BalanceMonitor
+from .chart import render_chart
 from .config import Config
 from .head import HeadEstimate, Side, side_label
 from .i18n import t
@@ -28,6 +29,8 @@ from .tracker import Segment, build_segments
 log = logging.getLogger(__name__)
 
 SYSTEM_SOUNDS = Path("/System/Library/Sounds")
+# Days on the chart's "left and right per day" panel.
+CHART_DAYS = 7
 # How far back sleep is looked for, to see a sleep that began before the period asked about.
 SLEEP_LOOKBACK = timedelta(hours=12)
 SOUND_REPEATS = 3
@@ -110,7 +113,10 @@ class Notifier:
         self.frame: Frame | None = None
         token, chat_ids = resolve_credentials(cfg.telegram.token, cfg.telegram.chat_ids)
         commands = [
-            ("now", t("bot.cmd.now")), ("stats", t("bot.cmd.stats")), ("sleep", t("bot.cmd.sleep"))
+            ("now", t("bot.cmd.now")),
+            ("stats", t("bot.cmd.stats")),
+            ("sleep", t("bot.cmd.sleep")),
+            ("chart", t("bot.cmd.chart")),
         ]
         if cfg.telegram.photos:
             commands += [("photo", t("bot.cmd.photo")), ("marked", t("bot.cmd.marked"))]
@@ -150,6 +156,8 @@ class Notifier:
             return self.stats_text()
         if command == "/sleep":
             return self.sleep_text()
+        if command == "/chart":
+            return self.chart()
         if command in ("/photo", "/marked"):
             return self.photo(marked=command == "/marked")
         return t("bot.help")
@@ -169,6 +177,31 @@ class Notifier:
         score = f"{frame.estimate.score:+.2f}" if frame.estimate.score is not None else "-"
         caption = t("bot.photo_caption", time=f"{frame.time:%H:%M:%S}", side=side_label(frame.estimate.side), score=score)
         return Photo(jpeg.tobytes(), caption)
+
+    def chart(self) -> str | Photo:
+        now = self.status.time or datetime.now()
+        day_start = parse_day_start(self.cfg.tracking.day_starts_at)
+        since = day_bounds(day_of(now, day_start) - timedelta(days=CHART_DAYS - 1), day_start)[0]
+        storage = Storage(self.cfg.storage.db_path)
+        try:
+            samples = storage.samples(since)
+            activity = storage.activity(since - SLEEP_LOOKBACK)
+        finally:
+            storage.close()
+        png = render_chart(
+            build_report(
+                samples,
+                center_threshold=self.cfg.head.center_threshold,
+                confirm_seconds=self.cfg.tracking.confirm_seconds,
+                gap_seconds=self.cfg.tracking.gap_seconds,
+                day_start=day_start,
+            ),
+            sleep_days(activity, self.cfg.sleep, day_start),
+            day_start,
+        )
+        if png is None:
+            return t("report.no_data")
+        return Photo(png, t("bot.chart_caption", time=f"{now:%H:%M}"), filename="chart.png")
 
     def now_text(self) -> str:
         status = self.status

@@ -11,6 +11,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from .chart import render_chart
 from .config import Config, DetectorConfig, load_config, load_dotenv
 from .head import HeadEstimate, Side, estimate_head, side_label
 from .i18n import LANGUAGES, set_language, t
@@ -192,6 +193,12 @@ def report(cfg: Config, args: argparse.Namespace) -> None:
     days = [d for d in sleep_days(activity, cfg.sleep, day_start) if d.day >= first]
     print()
     print(render_sleep(days, day_start, detail_days=args.timelines, samples=activity))
+    if args.chart:
+        png = render_chart(summaries, sleep_days(activity, cfg.sleep, day_start), day_start)
+        if png is not None:
+            Path(args.chart).write_bytes(png)
+            print()
+            print(t("cli.chart_saved", path=args.chart))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -211,6 +218,7 @@ def build_parser() -> argparse.ArgumentParser:
     report_cmd.add_argument("--days", type=int, default=7, help=t("cli.help.days"))
     report_cmd.add_argument("--date", type=date.fromisoformat, help=t("cli.help.date"))
     report_cmd.add_argument("--timelines", type=int, default=1, help=t("cli.help.timelines"))
+    report_cmd.add_argument("--chart", metavar="FILE", help=t("cli.help.chart"))
     return parser
 
 

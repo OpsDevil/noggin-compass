@@ -165,7 +165,7 @@ def test_photo_commands(tmp_path):
     for command in ("/photo", "/marked"):
         photo = notifier.handle_command(command)
         assert isinstance(photo, Photo)
-        assert photo.jpeg[:2] == b"\xff\xd8"
+        assert photo.image[:2] == b"\xff\xd8"
         assert photo.caption == "22:00:00, head turned left (score +0.62)"
 
 
@@ -176,11 +176,37 @@ def test_bot_sends_photo_as_multipart():
     (body,) = fake.photos()
     assert b'name="chat_id"' in body and b"10" in body
     assert b'name="photo"; filename="frame.jpg"' in body and b"\xff\xd8jpeg" in body
+    assert b"Content-Type: image/jpeg" in body
+
+
+def test_bot_sends_png_chart_as_png():
+    fake = FakeTelegram()
+    chart = Photo(b"\x89PNG", "caption", filename="chart.png")
+    bot = telegram.TelegramBot("token", [10], handler=lambda text: chart, opener=fake)
+    bot.handle_updates([{"update_id": 1, "message": {"chat": {"id": 10}, "text": "/chart"}}])
+    (body,) = fake.photos()
+    assert b'filename="chart.png"' in body and b"Content-Type: image/png" in body
+
+
+def test_chart_command(tmp_path):
+    cfg = Config()
+    cfg.storage.db_path = str(tmp_path / "db.sqlite")
+    notifier = notify.Notifier(cfg)
+    notifier.status = notify.Status(time=T0 + timedelta(hours=1))
+    assert notifier.handle_command("/chart") == "No data yet."
+    storage = Storage(cfg.storage.db_path)
+    for i in range(0, 3600, 5):
+        side, score = (Side.LEFT, 0.8) if i < 1800 else (Side.RIGHT, -0.8)
+        storage.add(T0 + timedelta(seconds=i), HeadEstimate(side, score), 0.0)
+    storage.close()
+    chart = notifier.handle_command("/chart")
+    assert isinstance(chart, Photo) and chart.image[:4] == b"\x89PNG"
+    assert chart.filename == "chart.png"
 
 
 def test_command_menu_lists_photos_only_when_allowed():
     cfg = Config()
     cfg.telegram.token, cfg.telegram.chat_ids = "token", [10]
-    assert [name for name, _ in notify.Notifier(cfg).bot.commands] == ["now", "stats", "sleep"]
+    assert [name for name, _ in notify.Notifier(cfg).bot.commands] == ["now", "stats", "sleep", "chart"]
     cfg.telegram.photos = True
-    assert [name for name, _ in notify.Notifier(cfg).bot.commands] == ["now", "stats", "sleep", "photo", "marked"]
+    assert [name for name, _ in notify.Notifier(cfg).bot.commands] == ["now", "stats", "sleep", "chart", "photo", "marked"]

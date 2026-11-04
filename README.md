@@ -49,6 +49,7 @@ flowchart TD
     subgraph nn ["YOLO pose, two passes"]
         pass1["Pass 1: find the baby<br/>and the shoulder line"] --> rotate["Rotate the crop<br/>so the head points up"]
         rotate --> pass2["Pass 2: nose, eyes, ears"]
+        memory["Or the crop of the baby<br/>found in the last minute"] --> pass2
     end
     crop --> pass1
     pass2 --> geometry["Where is the face between the ears?<br/>score from -1 to +1"]
@@ -64,6 +65,12 @@ flowchart TD
   finds the baby and the shoulder line, then the crop is rotated so the head points up and the
   model runs again. On our recording of a sleeping baby with the head in profile this took the
   correct answers from 6 of 28 frames to 27 of 28.
+* **Memory.** Seen from above in a white sleep sack, the baby is missed by the first pass on many
+  frames even when nothing has changed. So the crop of the last baby found is tried again for a
+  minute, and the second pass the model is more sure of wins. If the second pass does not see the
+  shoulders, the body axis from the first pass is used. On an evening recording this cut frames
+  without an answer from 77 of 229 to 18, and the left/right flips on a baby lying still almost
+  disappeared.
 * **Geometry, not magic.** Think of the head as a ball. When it turns, the face moves sideways
   while the ears move towards the middle, so the face position between the ears tells the angle.
   The score is 0 for straight, about 0.35 at 20 degrees and 1 for a full profile; positive means
@@ -308,9 +315,10 @@ second. Measured on an Apple M4 Pro, two passes at `imgsz: 1280`:
 | yolo11s-pose | 182 ms per frame | 60 ms per frame |
 | yolo26s-pose | 215 ms per frame | 67 ms per frame |
 
-The results are identical (keypoints differ by less than a pixel), so `device: mps` on Apple
-Silicon simply leaves more CPU free. With an NVIDIA card use `device: 0` (needs a CUDA build of
-PyTorch). Nothing else has to be set up.
+The results are identical (keypoints differ by less than a pixel), so `device: mps` on Apple Silicon
+simply leaves more CPU free. Trying the remembered crop (see How it works) adds one more pass, about
+half as much time again. With an NVIDIA card use `device: 0` (needs a CUDA build of PyTorch).
+Nothing else has to be set up.
 
 ## Limitations
 

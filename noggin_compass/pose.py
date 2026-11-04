@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import cv2
@@ -14,6 +14,10 @@ LEFT_SHOULDER, RIGHT_SHOULDER = 5, 6
 # Size of the crop around the baby relative to its bounding box.
 UPRIGHT_MARGIN = 1.3
 UPRIGHT_PERSON_CONF = 0.1
+# How long the crop of the last found baby is tried again. Seen from above in a sleep sack, the
+# baby is missed by the first pass on many frames, but a sleeping baby barely moves, so the old
+# crop still finds it. The limit stops a stale crop from outliving a real change of position.
+MEMORY_SECONDS = 60
 MODELS_DIR = Path("models")
 
 
@@ -23,6 +27,9 @@ class Person:
     score: float
     xy: np.ndarray  # (17, 2) in pixels
     conf: np.ndarray  # (17,)
+    # Unit vector shoulders -> head from the first pass, used for the head estimate when the
+    # second pass does not see the shoulders.
+    up: np.ndarray | None = None
 
 
 @dataclass
@@ -97,6 +104,7 @@ class PoseDetector:
         self.device = device
         self.min_person_conf = min_person_conf
         self.imgsz = imgsz
+        self._memory: tuple[float, np.ndarray, np.ndarray] | None = None  # time, box, up
 
     def detect(self, frame: np.ndarray, min_person_conf: float | None = None) -> Person | None:
         conf = self.min_person_conf if min_person_conf is None else min_person_conf
@@ -114,26 +122,38 @@ class PoseDetector:
         conf = keypoints.conf[i].cpu().numpy() if keypoints.conf is not None else np.ones(len(xy))
         return Person(boxes[i], float(result.boxes.conf[i]), xy, conf)
 
-    def detect_upright(self, frame: np.ndarray, min_conf: float) -> Person | None:
+    def detect_upright(self, frame: np.ndarray, min_conf: float, now: float | None = None) -> Person | None:
         """Two passes. The model was trained on standing and sitting people and confuses face
         points, especially the ears, on a baby lying across the frame. The first pass finds the
-        baby and its shoulders, which it does reliably. The second runs on a crop rotated
-        head-up, where the face is detected much better. Keypoints are returned in source frame
-        coordinates."""
+        baby and its shoulders. The second runs on a crop rotated head-up, where the face is
+        detected much better. Keypoints are returned in source frame coordinates.
+
+        With `now` (seconds), the crop of the last baby found in the past MEMORY_SECONDS is tried
+        too, and the second pass the model is more sure of wins."""
         first = self.detect(frame)
-        if first is None:
-            return None
-        up = body_up(first, min_conf)
-        if up is None:
-            return first
-        view = UprightView.around(first.box, up, self.imgsz)
+        up = body_up(first, min_conf) if first is not None else None
+        fresh = self._second_pass(frame, first.box, up) if up is not None else None
+        best = fresh
+        if self._memory is not None and now is not None and now - self._memory[0] <= MEMORY_SECONDS:
+            # Also wins over a fresh detection that is something else (a glowing toy, a hand).
+            old = self._second_pass(frame, *self._memory[1:])
+            if old is not None and (best is None or old.score > best.score):
+                best = old
+        if fresh is not None and best is fresh and now is not None:
+            self._memory = (now, first.box, up)
+        if best is None and first is not None:
+            return replace(first, up=up)
+        return best
+
+    def _second_pass(self, frame: np.ndarray, box: np.ndarray, up: np.ndarray) -> Person | None:
+        view = UprightView.around(box, up, self.imgsz)
         crop = cv2.warpAffine(frame, view.matrix(), (view.size, view.size))
         # The first pass already found the baby, so a lower person threshold is safe here: under
         # a blanket, person confidence on the crop can be low. Keypoint confidences from the first
         # pass are not trusted: it is confidently wrong on a baby lying across the frame.
         second = self.detect(crop, min_person_conf=UPRIGHT_PERSON_CONF)
         if second is None:
-            return first
+            return None
         xy = view.to_frame(second.xy)
         xy[~second.xy.any(axis=1)] = 0  # keypoints the model did not place stay at (0, 0)
-        return Person(first.box, second.score, xy, second.conf)
+        return Person(box, second.score, xy, second.conf, up)

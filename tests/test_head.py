@@ -85,6 +85,24 @@ def test_fallback_axis_when_shoulders_hidden(rotate, direction):
     assert result.axis_source == "config"
 
 
+@pytest.mark.parametrize("rotate", [0, 90, 180, 270])
+def test_body_axis_from_first_pass_beats_config_when_shoulders_hidden(rotate):
+    # The baby lies head-right in the frame, as at night, but the config says "up".
+    xy, conf = synthetic_keypoints(-60, rotate, shoulders=False)
+    a = math.radians(rotate)
+    up = np.array([math.sin(a), -math.cos(a)])
+    result = estimate(xy, conf, body_up=up)
+    assert result.side == Side.RIGHT
+    assert result.axis_source == "body"
+
+
+def test_visible_shoulders_beat_body_axis():
+    xy, conf = synthetic_keypoints(-60)
+    result = estimate(xy, conf, body_up=np.array([0.0, 1.0]))  # upside down, would flip the side
+    assert result.side == Side.RIGHT
+    assert result.axis_source == "shoulders"
+
+
 def test_one_ear_frontal_is_center():
     xy, conf = synthetic_keypoints(0)
     conf[3] = HIDDEN  # left ear missed although the head is straight

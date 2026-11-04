@@ -28,9 +28,11 @@ STATUS_EVERY_SECONDS = 60
 PREVIEW_WINDOW = "noggin-compass"
 
 
-def analyze(detector: PoseDetector, frame: np.ndarray, cfg: Config) -> tuple[HeadEstimate, Person | None]:
+def analyze(
+    detector: PoseDetector, frame: np.ndarray, cfg: Config, now: float | None = None
+) -> tuple[HeadEstimate, Person | None]:
     if cfg.detector.upright:
-        person = detector.detect_upright(frame, cfg.detector.min_keypoint_conf)
+        person = detector.detect_upright(frame, cfg.detector.min_keypoint_conf, now)
     else:
         person = detector.detect(frame)
     if person is None:
@@ -42,6 +44,7 @@ def analyze(detector: PoseDetector, frame: np.ndarray, cfg: Config) -> tuple[Hea
         center_threshold=cfg.head.center_threshold,
         mirrored=cfg.head.mirrored,
         fallback_head_direction=cfg.head.fallback_head_direction,
+        body_up=person.up,
     )
     return estimate, person
 
@@ -110,7 +113,7 @@ def run(cfg: Config, args: argparse.Namespace) -> None:
                 monitor.add(load_history(storage, cfg, until=ts))
                 history_loaded = True
             frame = preprocess(frame, cfg.camera.rotate, cfg.camera.roi)
-            estimate, person = analyze(detector, frame, cfg)
+            estimate, person = analyze(detector, frame, cfg, ts.timestamp())
             storage.add(ts, estimate)
             monitor.add(tracker.update(ts, estimate.side))
             current = tracker.current

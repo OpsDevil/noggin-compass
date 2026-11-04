@@ -27,6 +27,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "method.nose_and_eyes": "nose and eyes",
         "method.with_axis": "{method}, axis: {axis}",
         "axis.shoulders": "shoulders",
+        "axis.body": "body",
         "axis.config": "config",
         # Preview
         "kp.0": "nose",
@@ -150,6 +151,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "method.nose_and_eyes": "нос и глаза",
         "method.with_axis": "{method}, ось: {axis}",
         "axis.shoulders": "плечи",
+        "axis.body": "тело",
         "axis.config": "конфиг",
         "kp.0": "нос",
         "kp.1": "лев. глаз",

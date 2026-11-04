@@ -52,7 +52,7 @@ class HeadEstimate:
     score: float | None = None
     # A code like "both_ears": stored in the database as is, translated only for display.
     method: str = ""
-    axis_source: str = ""  # where the "up" axis came from: "shoulders" or "config"
+    axis_source: str = ""  # where the "up" axis came from: "shoulders", "body" or "config"
     # Unit vector "up along the body" in frame coordinates, used to draw the preview.
     axis: tuple[float, float] | None = None
 
@@ -76,13 +76,19 @@ def classify(score: float, center_threshold: float) -> Side:
 
 
 def _body_axis(
-    xy: np.ndarray, visible: np.ndarray, head_center: np.ndarray, fallback: str
+    xy: np.ndarray,
+    visible: np.ndarray,
+    head_center: np.ndarray,
+    body_up: np.ndarray | None,
+    fallback: str,
 ) -> tuple[np.ndarray, str]:
     if visible[LEFT_SHOULDER] and visible[RIGHT_SHOULDER]:
         up = head_center - (xy[LEFT_SHOULDER] + xy[RIGHT_SHOULDER]) / 2
         norm = float(np.linalg.norm(up))
         if norm > 1e-6:
             return up / norm, "shoulders"
+    if body_up is not None:
+        return np.asarray(body_up, dtype=float), "body"
     if fallback not in _DIRECTIONS:
         raise ValueError(t("err.fallback_direction"))
     return np.array(_DIRECTIONS[fallback]), "config"
@@ -96,7 +102,10 @@ def estimate_head(
     center_threshold: float,
     mirrored: bool = False,
     fallback_head_direction: str = "up",
+    body_up: np.ndarray | None = None,
 ) -> HeadEstimate:
+    """body_up: unit vector shoulders -> head found earlier (on the first detector pass), used
+    when the shoulders are not visible now. fallback_head_direction is the last resort."""
     xy = np.asarray(xy, dtype=float)
     visible = np.asarray(conf, dtype=float) >= min_conf
     both_eyes = bool(visible[LEFT_EYE] and visible[RIGHT_EYE])
@@ -107,7 +116,7 @@ def estimate_head(
     face_idx = [i for i in (NOSE, LEFT_EYE, RIGHT_EYE) if visible[i]]
     ear_idx = [i for i in (LEFT_EAR, RIGHT_EAR) if visible[i]]
     head_center = xy[face_idx + ear_idx].mean(axis=0)
-    up, axis_source = _body_axis(xy, visible, head_center, fallback_head_direction)
+    up, axis_source = _body_axis(xy, visible, head_center, body_up, fallback_head_direction)
 
     # Unit vector toward the baby's left shoulder. The baby faces the camera, so in an unmirrored
     # frame its left side is to the right of the "up" axis.

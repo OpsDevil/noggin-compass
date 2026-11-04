@@ -156,9 +156,17 @@ def period_lines(periods: list[SleepPeriod], now: datetime | None = None) -> lis
     ]
 
 
-def render_sleep(days: list[SleepDay], day_start: time, detail_days: int = 1) -> str:
+def no_sleep_text(samples: list[tuple[datetime, Side, float | None]]) -> str:
+    """Why there is no sleep: none yet, or no movement data to tell it from."""
+    has_motion = any(m is not None for _, _, m in samples)
+    return t("sleep.none_yet") if has_motion else t("sleep.none")
+
+
+def render_sleep(
+    days: list[SleepDay], day_start: time, detail_days: int = 1, samples: list | None = None
+) -> str:
     if not days:
-        return t("sleep.none")
+        return no_sleep_text(samples or [])
     weekdays = t("weekdays").split(",")
     out = [t("sleep.title", start=f"{day_start:%H:%M}")]
     for d in days:

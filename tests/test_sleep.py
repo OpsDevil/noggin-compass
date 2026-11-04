@@ -95,3 +95,21 @@ def test_sleep_is_split_at_day_start():
     start = datetime(2026, 11, 5, 11, 0)
     days = sleep_days(frames("s" * 120, start), CFG, time(12, 0))
     assert [(d.day.day, d.total) for d in days] == [(4, 3600), (5, 3600)]
+
+
+def test_newborn_twitching_in_sleep_stays_asleep():
+    # A minute with a fifth of its frames moving (twitches, a hand fixing the pacifier) is still.
+    samples = frames("s" * 12)
+    extra = frames("s" * 3, T0 + timedelta(minutes=12))
+    for i in range(12):
+        ts = extra[i][0]
+        extra[i] = (ts, Side.RIGHT, MOVING)
+    periods = find_sleep(samples + extra + frames("s" * 10, T0 + timedelta(minutes=15)), CFG)
+    assert len(periods) == 1 and periods[0].seconds == 25 * 60
+
+
+def test_no_sleep_message_depends_on_movement_data():
+    from noggin_compass.sleep import no_sleep_text
+
+    assert "yet" in no_sleep_text(frames("mm"))
+    assert "older versions" in no_sleep_text([(T0, Side.RIGHT, None)])

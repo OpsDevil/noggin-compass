@@ -191,7 +191,7 @@ def report(cfg: Config, args: argparse.Namespace) -> None:
     first = summaries[0].day if summaries else day_of(since, day_start)
     days = [d for d in sleep_days(activity, cfg.sleep, day_start) if d.day >= first]
     print()
-    print(render_sleep(days, day_start, detail_days=args.timelines))
+    print(render_sleep(days, day_start, detail_days=args.timelines, samples=activity))
 
 
 def build_parser() -> argparse.ArgumentParser:

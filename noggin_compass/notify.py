@@ -18,7 +18,7 @@ from .config import Config
 from .head import HeadEstimate, Side, side_label
 from .i18n import t
 from .report import build_report, day_bounds, day_of, fmt_duration, parse_day_start, reclassify
-from .sleep import period_lines, sleep_days, sleep_state
+from .sleep import no_sleep_text, period_lines, sleep_days, sleep_state
 from .pose import Person
 from .preview import draw, fit
 from .storage import Storage
@@ -213,15 +213,16 @@ class Notifier:
         too, so that a sleep that began earlier is recognised."""
         day_start = parse_day_start(self.cfg.tracking.day_starts_at)
         since, until = day_bounds(day_of(now, day_start), day_start)
-        days = sleep_days(self._activity(since - SLEEP_LOOKBACK, until), self.cfg.sleep, day_start)
+        samples = self._activity(since - SLEEP_LOOKBACK, until)
+        days = sleep_days(samples, self.cfg.sleep, day_start)
         today = [d for d in days if d.day == day_of(now, day_start)]
-        return (today[0] if today else None), since
+        return (today[0] if today else None), since, samples
 
     def sleep_text(self) -> str:
         now = self.status.time or datetime.now()
-        day, since = self._today_sleep(now)
+        day, since, samples = self._today_sleep(now)
         if day is None:
-            return t("sleep.none")
+            return no_sleep_text(samples)
         lines = [
             t(
                 "bot.sleep",
@@ -264,7 +265,7 @@ class Notifier:
             unknown=fmt_duration(s.totals[Side.UNKNOWN]),
             turns=s.turns,
         )
-        day, _ = self._today_sleep(now)
+        day, _, _ = self._today_sleep(now)
         if day is not None:
             text += "\n" + t("bot.stats_sleep", total=fmt_duration(day.total), count=len(day.periods))
         return text

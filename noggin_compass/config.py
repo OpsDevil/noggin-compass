@@ -93,8 +93,10 @@ class TelegramConfig:
 class SleepConfig:
     # A frame counts as movement when this share of the baby's area changed since the previous one.
     frame_motion: float = 0.02
-    # A minute is restless when at least this share of its frames had movement.
-    restless_share: float = 0.1
+    # A minute is restless when at least this share of its frames had movement. A sleeping baby
+    # twitches, and a parent's hand or a light from the door adds more: on the first recorded
+    # night sleeping minutes reached 0.3.
+    restless_share: float = 0.3
     # Asleep after this many still minutes in a row; the sleep starts at the first of them.
     fall_asleep_minutes: int = 10
     # Awake after wake_minutes restless minutes within wake_window_minutes.

@@ -307,7 +307,7 @@ All options with their defaults are in [`config.example.yaml`](config.example.ya
 | `telegram.photos` | `false` | Allow `/photo` and `/marked`: a picture from the camera, plain or with the detected points. Off by default because the pictures go through Telegram. |
 | **sleep** | | |
 | `sleep.frame_motion` | `0.02` | A frame counts as movement when this share of the baby's area changed since the previous frame. |
-| `sleep.restless_share` | `0.1` | A minute is restless when at least this share of its frames had movement. |
+| `sleep.restless_share` | `0.3` | A minute is restless when at least this share of its frames had movement. |
 | `sleep.fall_asleep_minutes` | `10` | Asleep after this many still minutes in a row; the sleep starts at the first of them. |
 | `sleep.wake_minutes` | `3` | Awake after this many restless minutes... |
 | `sleep.wake_window_minutes` | `5` | ...within this many minutes. |

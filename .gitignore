@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.DS_Store
+
+# Model weights are downloaded on first run.
+models/
+
+# Private: the database, crib snapshots, the config with the camera URL.
+data/
+*.db
+*.db-wal
+*.db-shm
+config.yaml
+
+# Passwords and tokens.
+.env

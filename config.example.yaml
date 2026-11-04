@@ -1,0 +1,67 @@
+# Copy to config.yaml and adjust. Every option is optional: anything left out uses the default
+# shown here. config.yaml is git-ignored.
+
+language: en                # interface language: en or ru
+
+camera:
+  # Where the video comes from:
+  #   rtsp://LOGIN:{password}@192.168.1.50:554/stream1   Tapo (stream2 is a lower-quality stream)
+  #   rtsp://admin:{password}@192.168.1.50:554/Preview_01_main   Reolink
+  #   0                                                  the built-in webcam, to try it on yourself
+  #   night.mp4                                          a recorded video
+  # {password} is replaced with the camera password, looked up in this order: the
+  # NOGGIN_CAMERA_PASSWORD environment variable (it can live in a .env file next to this config),
+  # camera.password below, the macOS Keychain entry "noggin-compass-camera".
+  source: 0
+  password:                 # camera password; the environment variable takes precedence
+  sample_fps: 1             # frames analysed per second; the head does not turn often
+  rotate: 0                 # rotate the picture by 0, 90, 180 or 270 degrees before analysis
+  roi:                      # crib area as fractions of the frame [left, top, right, bottom],
+                            # e.g. [0.15, 0.25, 0.84, 0.88]; empty means the whole frame
+
+detector:
+  # Ultralytics pose model: a file path or a name. A name that is not in models/ yet is
+  # downloaded there automatically on the next run, e.g. yolo26s-pose.pt or yolo11m-pose.pt.
+  model: models/yolo11s-pose.pt
+  device: cpu               # cpu, mps (Apple Silicon GPU) or 0 (first NVIDIA GPU)
+  imgsz: 640                # picture size for the network; 1280 for an overhead camera
+  upright: true             # second pass on a crop with the baby turned head-up
+  min_person_conf: 0.35     # how sure the network must be that it sees a person
+  min_keypoint_conf: 0.4    # keypoints below this confidence are ignored
+
+head:
+  center_threshold: 0.35    # how far the head must turn to count as left/right; 0.35 ~ 20 degrees
+  mirrored: false           # true if the camera picture is mirrored
+  fallback_head_direction: up   # where the top of the head points when shoulders are not visible:
+                                # up, down, left or right
+
+tracking:
+  confirm_seconds: 10       # a new head position counts after holding this long
+  gap_seconds: 60           # a longer pause without frames is a gap and is not counted
+  day_starts_at: "12:00"    # report days run from noon to noon, so a night stays in one day
+
+alerts:
+  # "Time to turn the baby" alerts: a sound and a notification on this computer plus a Telegram
+  # message, see the telegram section. Both rules are off with 0, e.g. 180 and 180.
+  max_same_side_minutes: 0  # alert when the head stays on one side this long
+  max_imbalance_minutes: 0  # alert when one side is ahead of the other by this much over the
+                            # last window_hours and the head is on that side again
+  window_hours: 12          # how far back the balance is counted
+  min_turn_minutes: 15      # a turn to the other side shorter than this does not count
+  repeat_minutes: 15        # repeat the alert this often while the head stays on that side
+  sound: true               # play a sound (macOS)
+  sound_file: Funk          # a macOS system sound (Funk, Glass, Sosumi, Basso...) or a file path
+
+telegram:
+  # Bot token from @BotFather, looked up in this order: the NOGGIN_TELEGRAM_TOKEN environment
+  # variable, this setting, the macOS Keychain entry "noggin-compass-telegram".
+  token:
+  # Chats that get alerts and may use /now and /stats; NOGGIN_TELEGRAM_CHAT_IDS (comma-separated)
+  # takes precedence. Unknown chats are ignored and their ids are printed in the log.
+  chat_ids: []
+
+storage:
+  db_path: data/noggin-compass.db
+  snapshots_dir: data/snapshots
+  snapshot_every_seconds: 0 # every N seconds save a frame, an annotated copy and a line in
+                            # analysis.jsonl with the keypoints; 0 turns it off

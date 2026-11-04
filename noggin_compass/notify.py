@@ -18,8 +18,8 @@ from .chart import render_chart
 from .config import Config
 from .head import HeadEstimate, Side, side_label
 from .i18n import t
-from .report import build_report, day_bounds, day_of, fmt_duration, parse_day_start, reclassify
-from .sleep import no_sleep_text, period_lines, sleep_days, sleep_state
+from .report import build_report, day_bounds, day_of, fmt_duration, parse_day_start, reclassify, summarize
+from .sleep import find_sleep, no_sleep_text, period_lines, sleep_state
 from .pose import Person
 from .preview import draw, fit
 from .storage import Storage
@@ -29,6 +29,9 @@ from .tracker import Segment, build_segments
 log = logging.getLogger(__name__)
 
 SYSTEM_SOUNDS = Path("/System/Library/Sounds")
+# The bot answers about a rolling window: "the last 24 hours" needs no explaining, unlike a report
+# day that starts at noon.
+RECENT_WINDOW = timedelta(hours=24)
 # Days on the chart's "left and right per day" panel.
 CHART_DAYS = 7
 # How far back sleep is looked for, to see a sleep that began before the period asked about.
@@ -178,27 +181,43 @@ class Notifier:
         caption = t("bot.photo_caption", time=f"{frame.time:%H:%M:%S}", side=side_label(frame.estimate.side), score=score)
         return Photo(jpeg.tobytes(), caption)
 
-    def chart(self) -> str | Photo:
-        now = self.status.time or datetime.now()
-        day_start = parse_day_start(self.cfg.tracking.day_starts_at)
-        since = day_bounds(day_of(now, day_start) - timedelta(days=CHART_DAYS - 1), day_start)[0]
+    def _recent(self, now: datetime):
+        """The last 24 hours: head summary (None without data), sleeps that overlap the window,
+        and the raw activity. A sleep that began earlier is found too."""
+        since = now - RECENT_WINDOW
         storage = Storage(self.cfg.storage.db_path)
         try:
-            samples = storage.samples(since)
-            activity = storage.activity(since - SLEEP_LOOKBACK)
+            samples = storage.samples(since, now)
+            activity = storage.activity(since - SLEEP_LOOKBACK, now)
         finally:
             storage.close()
-        png = render_chart(
-            build_report(
-                samples,
-                center_threshold=self.cfg.head.center_threshold,
-                confirm_seconds=self.cfg.tracking.confirm_seconds,
-                gap_seconds=self.cfg.tracking.gap_seconds,
-                day_start=day_start,
-            ),
-            sleep_days(activity, self.cfg.sleep, day_start),
-            day_start,
+        segments = build_segments(
+            reclassify(samples, self.cfg.head.center_threshold),
+            self.cfg.tracking.confirm_seconds,
+            self.cfg.tracking.gap_seconds,
         )
+        summary = summarize(since.date(), segments) if segments else None
+        periods = [p for p in find_sleep(activity, self.cfg.sleep) if p.end > since]
+        return summary, periods, activity, since
+
+    def chart(self) -> str | Photo:
+        now = self.status.time or datetime.now()
+        summary, periods, _, _ = self._recent(now)
+        day_start = parse_day_start(self.cfg.tracking.day_starts_at)
+        first = day_bounds(day_of(now, day_start) - timedelta(days=CHART_DAYS - 1), day_start)[0]
+        storage = Storage(self.cfg.storage.db_path)
+        try:
+            samples = storage.samples(first, now)
+        finally:
+            storage.close()
+        days = build_report(
+            samples,
+            center_threshold=self.cfg.head.center_threshold,
+            confirm_seconds=self.cfg.tracking.confirm_seconds,
+            gap_seconds=self.cfg.tracking.gap_seconds,
+            day_start=day_start,
+        )
+        png = render_chart(summary, periods, days, t("chart.title_recent"), day_start)
         if png is None:
             return t("report.no_data")
         return Photo(png, t("bot.chart_caption", time=f"{now:%H:%M}"), filename="chart.png")
@@ -241,54 +260,29 @@ class Notifier:
         finally:
             storage.close()
 
-    def _today_sleep(self, now: datetime):
-        """Today's sleep (report day) and the day start. Data from before the day start is read
-        too, so that a sleep that began earlier is recognised."""
-        day_start = parse_day_start(self.cfg.tracking.day_starts_at)
-        since, until = day_bounds(day_of(now, day_start), day_start)
-        samples = self._activity(since - SLEEP_LOOKBACK, until)
-        days = sleep_days(samples, self.cfg.sleep, day_start)
-        today = [d for d in days if d.day == day_of(now, day_start)]
-        return (today[0] if today else None), since, samples
-
     def sleep_text(self) -> str:
         now = self.status.time or datetime.now()
-        day, since, samples = self._today_sleep(now)
-        if day is None:
-            return no_sleep_text(samples)
+        _, periods, activity, since = self._recent(now)
+        if not periods:
+            return no_sleep_text(activity)
+        total = sum((p.end - max(p.start, since)).total_seconds() for p in periods)
         lines = [
             t(
                 "bot.sleep",
-                start=f"{since:%d.%m %H:%M}",
-                total=fmt_duration(day.total),
-                count=len(day.periods),
-                longest=fmt_duration(day.longest),
+                total=fmt_duration(total),
+                count=len(periods),
+                longest=fmt_duration(max(p.seconds for p in periods)),
             )
         ]
-        return "\n".join(lines + period_lines(day.periods, now))
+        return "\n".join(lines + period_lines(periods, now))
 
     def stats_text(self) -> str:
-        day_start = parse_day_start(self.cfg.tracking.day_starts_at)
         now = self.status.time or datetime.now()
-        since, until = day_bounds(day_of(now, day_start), day_start)
-        storage = Storage(self.cfg.storage.db_path)
-        try:
-            samples = storage.samples(since, until)
-        finally:
-            storage.close()
-        summaries = build_report(
-            samples,
-            center_threshold=self.cfg.head.center_threshold,
-            confirm_seconds=self.cfg.tracking.confirm_seconds,
-            gap_seconds=self.cfg.tracking.gap_seconds,
-            day_start=day_start,
-        )
-        if not summaries:
+        s, periods, _, since = self._recent(now)
+        if s is None:
             return t("report.no_data")
-        s = summaries[-1]
         text = t(
             "bot.stats",
-            start=f"{since:%d.%m %H:%M}",
             left=fmt_duration(s.totals[Side.LEFT]),
             left_pct=f"{s.share(Side.LEFT):.0%}",
             right=fmt_duration(s.totals[Side.RIGHT]),
@@ -298,11 +292,10 @@ class Notifier:
             unknown=fmt_duration(s.totals[Side.UNKNOWN]),
             turns=s.turns,
         )
-        day, _, _ = self._today_sleep(now)
-        if day is not None:
-            text += "\n" + t("bot.stats_sleep", total=fmt_duration(day.total), count=len(day.periods))
+        if periods:
+            total = sum((p.end - max(p.start, since)).total_seconds() for p in periods)
+            text += "\n" + t("bot.stats_sleep", total=fmt_duration(total), count=len(periods))
         return text
-
 
 def load_history(storage: Storage, cfg: Config, until: datetime) -> list[Segment]:
     """Segments from the last window_hours in the database, smoothed as in the report, so that

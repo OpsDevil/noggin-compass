@@ -210,9 +210,9 @@ An alert says which side to turn the head to. It plays a sound and shows a notif
 computer running the program (macOS) and is repeated every `alerts.repeat_minutes` while the head
 stays on that side. The numbers above are an example; agree on the limits with your paediatrician.
 
-**Telegram.** Alerts can also go to Telegram, and the bot answers `/now` (where the head is,
-whether it is time to turn and whether the baby is asleep), `/stats` (time per side today),
-`/sleep` (sleep today, see [Sleep](#sleep)) and `/chart` (the same chart as `report --chart`):
+**Telegram.** Alerts can also go to Telegram, and the bot answers `/now` (where the head is, whether
+it is time to turn and whether the baby is asleep), and over the last 24 hours `/stats` (time per
+side), `/sleep` (sleep, see [Sleep](#sleep)) and `/chart` (a chart like `report --chart`):
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and store its token in the macOS Keychain
    (the command asks for the token and does not echo it):
@@ -250,8 +250,8 @@ barely moves, an awake one turns, kicks and waves its arms. This is how sleep ac
   restless minute during sleep do not count.
 
 `noggin-compass report` shows sleep per day and the list of sleeps, `/sleep` in Telegram the same
-for today, `/now` whether the baby is asleep right now. The raw movement of every frame is stored,
-so changed thresholds apply to old nights too.
+for the last 24 hours, `/now` whether the baby is asleep right now. The raw movement of every frame
+is stored, so changed thresholds apply to old nights too.
 
 ```
 Sleep in the crib (days start at 12:00):

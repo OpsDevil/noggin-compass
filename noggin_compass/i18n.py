@@ -88,15 +88,15 @@ MESSAGES: dict[str, dict[str, str]] = {
         "bot.help": (
             "noggin-compass\n"
             "/now - where the head is now and whether it is time to turn\n"
-            "/stats - time per side today\n"
-            "/sleep - sleep today\n"
-            "/chart - a chart: time per side, when, and left versus right per day\n"
+            "/stats - time per side over the last 24 hours\n"
+            "/sleep - sleep over the last 24 hours\n"
+            "/chart - a chart of the last 24 hours and left versus right per day\n"
             "/photo - a picture from the camera right now\n"
             "/marked - the same picture with what the program detected\n"
             "Turn alerts arrive here by themselves."
         ),
         "bot.cmd.now": "where the head is now",
-        "bot.cmd.stats": "time per side today",
+        "bot.cmd.stats": "time per side, last 24 hours",
         "bot.cmd.photo": "picture from the camera now",
         "bot.cmd.marked": "picture with the detected points",
         "bot.photos_off": "Pictures are off. To allow /photo and /marked, set telegram.photos: true in the config.",
@@ -110,7 +110,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "bot.turn": "Time to turn it {turn}.",
         "bot.ok": "No need to turn yet.",
         "bot.stats": (
-            "Since {start}:\n"
+            "Last 24 hours:\n"
             "left {left} ({left_pct})\n"
             "right {right} ({right_pct})\n"
             "straight {center} ({center_pct})\n"
@@ -124,17 +124,18 @@ MESSAGES: dict[str, dict[str, str]] = {
         "sleep.ongoing": "{start}-now  {duration}",
         "sleep.none": "No sleep found for these days. Sleep is told from the baby's movement, which older versions did not record.",
         "sleep.none_yet": "No sleep found yet: it counts after the baby has lain still for a while.",
-        "bot.cmd.sleep": "sleep today",
-        "bot.sleep": "Sleep since {start}: {total}, sleeps: {count}, longest: {longest}",
+        "bot.cmd.sleep": "sleep, last 24 hours",
+        "bot.sleep": "Sleep over the last 24 hours: {total}, sleeps: {count}, longest: {longest}",
         "bot.now_asleep": "Asleep for {duration}, since {since}.",
         "bot.now_awake": "Not asleep right now.",
         "bot.stats_sleep": "sleep {total}, sleeps: {count}",
-        "chart.title": "Head, day {date} from {start}",
+        "chart.title_recent": "Head over the last 24 hours",
+        "chart.title_day": "Head, day {date}",
         "chart.timeline": "When",
         "chart.head": "head",
         "chart.sleep": "sleep",
         "chart.days": "{left} and {right} per day",
-        "bot.cmd.chart": "chart of the day",
+        "bot.cmd.chart": "chart, last 24 hours",
         "bot.chart_caption": "Data as of {time}",
         "tg.started": "Telegram: alerts and commands for {count} chat(s)",
         "tg.unknown_chat": (
@@ -230,15 +231,15 @@ MESSAGES: dict[str, dict[str, str]] = {
         "bot.help": (
             "noggin-compass\n"
             "/now - где сейчас голова и не пора ли поворачивать\n"
-            "/stats - время по сторонам за сегодня\n"
-            "/sleep - сон за сегодня\n"
-            "/chart - график: время по сторонам, когда и влево/вправо по суткам\n"
+            "/stats - время по сторонам за последние 24 часа\n"
+            "/sleep - сон за последние 24 часа\n"
+            "/chart - график за последние 24 часа и влево/вправо по суткам\n"
             "/photo - снимок с камеры прямо сейчас\n"
             "/marked - тот же снимок с тем, что нашла программа\n"
             "Сигналы \"пора повернуть\" приходят сюда сами."
         ),
         "bot.cmd.now": "где сейчас голова",
-        "bot.cmd.stats": "время по сторонам за сегодня",
+        "bot.cmd.stats": "время по сторонам за 24 часа",
         "bot.cmd.photo": "снимок с камеры сейчас",
         "bot.cmd.marked": "снимок с найденными точками",
         "bot.photos_off": "Снимки выключены. Чтобы разрешить /photo и /marked, укажите telegram.photos: true в конфиге.",
@@ -252,7 +253,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "bot.turn": "Пора повернуть её {turn}.",
         "bot.ok": "Поворачивать пока не нужно.",
         "bot.stats": (
-            "С {start}:\n"
+            "За последние 24 часа:\n"
             "влево {left} ({left_pct})\n"
             "вправо {right} ({right_pct})\n"
             "прямо {center} ({center_pct})\n"
@@ -266,17 +267,18 @@ MESSAGES: dict[str, dict[str, str]] = {
         "sleep.ongoing": "{start}-сейчас  {duration}",
         "sleep.none": "За эти дни сна не найдено. Сон определяется по движению малыша, а старые версии программы его не записывали.",
         "sleep.none_yet": "Сна пока не найдено: он засчитывается, когда малыш какое-то время полежит спокойно.",
-        "bot.cmd.sleep": "сон за сегодня",
-        "bot.sleep": "Сон с {start}: {total}, засыпаний: {count}, самый долгий: {longest}",
+        "bot.cmd.sleep": "сон за 24 часа",
+        "bot.sleep": "Сон за последние 24 часа: {total}, засыпаний: {count}, самый долгий: {longest}",
         "bot.now_asleep": "Спит уже {duration}, с {since}.",
         "bot.now_awake": "Сейчас не спит.",
         "bot.stats_sleep": "сон {total}, засыпаний: {count}",
-        "chart.title": "Голова, сутки {date} с {start}",
+        "chart.title_recent": "Голова за последние 24 часа",
+        "chart.title_day": "Голова за сутки {date}",
         "chart.timeline": "Когда",
         "chart.head": "голова",
         "chart.sleep": "сон",
         "chart.days": "{left} и {right} по суткам",
-        "bot.cmd.chart": "график за сутки",
+        "bot.cmd.chart": "график за 24 часа",
         "bot.chart_caption": "Данные на {time}",
         "tg.started": "Telegram: сигналы и команды для чатов: {count}",
         "tg.unknown_chat": (

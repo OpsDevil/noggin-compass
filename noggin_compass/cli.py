@@ -11,7 +11,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .chart import render_chart
+from .chart import day_label, render_chart
 from .config import Config, DetectorConfig, load_config, load_dotenv
 from .head import HeadEstimate, Side, estimate_head, side_label
 from .i18n import LANGUAGES, set_language, t
@@ -194,7 +194,10 @@ def report(cfg: Config, args: argparse.Namespace) -> None:
     print()
     print(render_sleep(days, day_start, detail_days=args.timelines, samples=activity))
     if args.chart:
-        png = render_chart(summaries, sleep_days(activity, cfg.sleep, day_start), day_start)
+        last = summaries[-1] if summaries else None
+        sleep = next((d.periods for d in days if last and d.day == last.day), [])
+        title = t("chart.title_day", date=day_label(last.day, day_start)) if last else ""
+        png = render_chart(last, sleep, summaries, title, day_start)
         if png is not None:
             Path(args.chart).write_bytes(png)
             print()

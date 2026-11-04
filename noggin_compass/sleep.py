@@ -19,8 +19,12 @@ from .report import day_bounds, day_of, fmt_duration
 MINUTE = timedelta(minutes=1)
 # A minute needs at least this many movement measurements, otherwise it counts as missing.
 MIN_FRAMES = 5
-# Missing data for longer than this (program stopped, camera off) ends a sleep: we don't know.
-MAX_GAP = timedelta(minutes=5)
+# A pause in the data shorter than this (the program restarted, the camera reconnected) does not
+# end a sleep: if the baby woke up meanwhile, the restless minutes after it show that. A longer
+# one ends the sleep where the data stopped: we don't know what happened.
+MAX_GAP = timedelta(minutes=30)
+# Without movement data this recent, the bot does not say whether the baby is asleep.
+RECENT = timedelta(minutes=5)
 
 
 class Minute(StrEnum):
@@ -184,7 +188,7 @@ def sleep_state(
     samples: list[tuple[datetime, Side, float | None]], cfg: SleepConfig, now: datetime
 ) -> tuple[bool | None, SleepPeriod | None]:
     """(asleep, current sleep) at `now`; (None, None) when there is no recent movement data."""
-    recent = now - MAX_GAP
+    recent = now - RECENT
     if not any(m is not None for ts, _, m in samples if ts >= recent):
         return None, None
     periods = find_sleep(samples, cfg)

@@ -210,3 +210,22 @@ def test_command_menu_lists_photos_only_when_allowed():
     assert [name for name, _ in notify.Notifier(cfg).bot.commands] == ["now", "stats", "sleep", "chart"]
     cfg.telegram.photos = True
     assert [name for name, _ in notify.Notifier(cfg).bot.commands] == ["now", "stats", "sleep", "chart", "photo", "marked"]
+
+
+def test_bot_answers_about_the_last_24_hours(tmp_path):
+    cfg = Config()
+    cfg.storage.db_path = str(tmp_path / "db.sqlite")
+    storage = Storage(cfg.storage.db_path)
+    old = T0 - timedelta(hours=30)
+    for i in range(0, 3600, 5):  # an hour on the right, more than 24 hours ago
+        storage.add(old + timedelta(seconds=i), HeadEstimate(Side.RIGHT, -0.8), 0.0)
+    for i in range(0, 1800, 5):  # half an hour on the left and asleep, just now
+        storage.add(T0 + timedelta(seconds=i), HeadEstimate(Side.LEFT, 0.8), 0.0)
+    storage.close()
+    notifier = notify.Notifier(cfg)
+    notifier.status = notify.Status(time=T0 + timedelta(minutes=30))
+    stats = notifier.stats_text()
+    assert stats.startswith("Last 24 hours:\nleft 30 min (100%)\nright 0 s")
+    assert "sleep 30 min, sleeps: 1" in stats
+    assert notifier.sleep_text().startswith("Sleep over the last 24 hours: 30 min, sleeps: 1")
+    assert notifier.chart().caption == "Data as of 22:30"

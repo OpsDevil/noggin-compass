@@ -71,9 +71,16 @@ def test_taken_out_of_crib_ends_sleep():
 
 
 def test_long_gap_ends_sleep_short_one_does_not():
-    assert len(find_sleep(frames("s" * 20 + "__" + "s" * 20), CFG)) == 1
-    periods = find_sleep(frames("s" * 20 + "_" * 10 + "s" * 20), CFG)
+    # A restart of the program in the middle of the night is one sleep, not two.
+    (period,) = find_sleep(frames("s" * 20 + "_" * 12 + "s" * 20), CFG)
+    assert period.seconds == 52 * 60
+    periods = find_sleep(frames("s" * 20 + "_" * 40 + "s" * 20), CFG)
     assert [p.seconds for p in periods] == [20 * 60, 20 * 60]
+
+
+def test_waking_during_a_gap_shows_after_it():
+    periods = find_sleep(frames("s" * 20 + "_" * 10 + "mmmm" + "s" * 3), CFG)
+    assert [(p.start, p.end) for p in periods] == [(T0, minutes_after(30))]
 
 
 def test_sleep_still_going_is_ongoing():

@@ -177,7 +177,7 @@ uv run noggin-compass [--config FILE] [--lang en|ru] report [options]
 | `--model MODEL` | Use another model just this once, see [Models](#models). |
 | `--device DEVICE` | Run the network on `cpu`, `mps` (Apple Silicon GPU) or `0` (first NVIDIA GPU) just this once. |
 | `--start TIME` | For a video file: when the recording started, e.g. `2026-11-04T21:30`, so the report gets real times. |
-| **`report`** | Print time per side for each day plus a minute-by-minute timeline. |
+| **`report`** | Print time per side for each day plus a minute-by-minute timeline, then sleep per day. |
 | `--days N` | How many recent days to show. Default: 7. |
 | `--date DATE` | Show one particular day, e.g. `2026-11-04`. |
 | `--timelines N` | For how many of the last days to print details and the timeline. Default: 1. |
@@ -209,8 +209,9 @@ An alert says which side to turn the head to. It plays a sound and shows a notif
 computer running the program (macOS) and is repeated every `alerts.repeat_minutes` while the head
 stays on that side. The numbers above are an example; agree on the limits with your paediatrician.
 
-**Telegram.** Alerts can also go to Telegram, and the bot answers `/now` (where the head is and
-whether it is time to turn) and `/stats` (time per side today):
+**Telegram.** Alerts can also go to Telegram, and the bot answers `/now` (where the head is,
+whether it is time to turn and whether the baby is asleep), `/stats` (time per side today) and
+`/sleep` (sleep today, see [Sleep](#sleep)):
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and store its token in the macOS Keychain
    (the command asks for the token and does not echo it):
@@ -231,6 +232,37 @@ pictures go through Telegram.
 
 The token and chat ids can also go into `config.yaml` (`telegram.token`, `telegram.chat_ids`). The
 token is looked up in this order: `NOGGIN_TELEGRAM_TOKEN`, `telegram.token`, the Keychain.
+
+## Sleep
+
+The program also counts how long the baby sleeps in the crib. No extra model is needed: every
+second it measures how much of the baby's area changed since the previous frame (the overall
+brightness change from a night light or the auto exposure is removed first). A sleeping baby
+barely moves, an awake one turns, kicks and waves its arms. This is how sleep actigraphy works.
+
+* Every minute in the crib is *still* or *restless*: restless when at least `sleep.restless_share`
+  of its frames had movement.
+* The baby is **asleep** after `sleep.fall_asleep_minutes` still minutes in a row, counted from the
+  first of them.
+* The baby is **awake** after `sleep.wake_minutes` restless minutes within
+  `sleep.wake_window_minutes`, or as soon as it is taken out of the crib. Twitches and a single
+  restless minute during sleep do not count.
+
+`noggin-compass report` shows sleep per day and the list of sleeps, `/sleep` in Telegram the same
+for today, `/now` whether the baby is asleep right now. The raw movement of every frame is stored,
+so changed thresholds apply to old nights too.
+
+```
+Sleep in the crib (days start at 12:00):
+04.11 (Wed)  11 h 20 min, sleeps: 4, longest: 4 h 05 min
+
+Sleep on 04.11.2026:
+  13:10-14:35  1 h 25 min
+  ...
+```
+
+Lying still with open eyes also counts as sleep, and naps in arms or in a stroller are not seen.
+For a rough daily total this is enough; telling open eyes from closed would need a face model.
 
 ## Configuration
 
@@ -273,6 +305,12 @@ All options with their defaults are in [`config.example.yaml`](config.example.ya
 | `telegram.token` | not set | Bot token from @BotFather. The `NOGGIN_TELEGRAM_TOKEN` environment variable takes precedence; if neither is set, the macOS Keychain entry `noggin-compass-telegram` is used. |
 | `telegram.chat_ids` | `[]` | Chats that get alerts and may use the bot commands. The `NOGGIN_TELEGRAM_CHAT_IDS` environment variable (comma-separated) takes precedence. |
 | `telegram.photos` | `false` | Allow `/photo` and `/marked`: a picture from the camera, plain or with the detected points. Off by default because the pictures go through Telegram. |
+| **sleep** | | |
+| `sleep.frame_motion` | `0.02` | A frame counts as movement when this share of the baby's area changed since the previous frame. |
+| `sleep.restless_share` | `0.1` | A minute is restless when at least this share of its frames had movement. |
+| `sleep.fall_asleep_minutes` | `10` | Asleep after this many still minutes in a row; the sleep starts at the first of them. |
+| `sleep.wake_minutes` | `3` | Awake after this many restless minutes... |
+| `sleep.wake_window_minutes` | `5` | ...within this many minutes. |
 | **storage** | | |
 | `storage.db_path` | `data/noggin-compass.db` | SQLite file with the per-second results. |
 | `storage.snapshots_dir` | `data/snapshots` | Where snapshots are saved. |
@@ -324,10 +362,12 @@ Nothing else has to be set up.
 
 * A face covered by a hand or a blanket is reported as "not visible" rather than guessed.
 * If an adult leans over the crib, the largest person in the crib area is analysed.
+* Sleep is told from movement only: lying still with open eyes counts as sleep, and only sleep in
+  the crib is seen.
 
 ## Roadmap
 
-- [ ] Sleep tracking: when the baby fell asleep, woke up, how long each nap was
+- [x] Sleep tracking: when the baby fell asleep, woke up, how long each nap was
 - [ ] Accuracy check on night-time infrared footage
 - [ ] Calibration from a set of labelled snapshots
 - [ ] A small local web page with the nightly charts, to check from a phone

@@ -87,6 +87,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "noggin-compass\n"
             "/now - where the head is now and whether it is time to turn\n"
             "/stats - time per side today\n"
+            "/sleep - sleep today\n"
             "/photo - a picture from the camera right now\n"
             "/marked - the same picture with what the program detected\n"
             "Turn alerts arrive here by themselves."
@@ -113,6 +114,17 @@ MESSAGES: dict[str, dict[str, str]] = {
             "not visible {unknown}\n"
             "turns: {turns}"
         ),
+        "sleep.title": "Sleep in the crib (days start at {start}):",
+        "sleep.day": "{total}, sleeps: {count}, longest: {longest}",
+        "sleep.day_title": "Sleep on {date}:",
+        "sleep.period": "{start}-{end}  {duration}",
+        "sleep.ongoing": "{start}-now  {duration}",
+        "sleep.none": "No sleep found for these days. Sleep is told from the baby's movement, which older versions did not record.",
+        "bot.cmd.sleep": "sleep today",
+        "bot.sleep": "Sleep since {start}: {total}, sleeps: {count}, longest: {longest}",
+        "bot.now_asleep": "Asleep for {duration}, since {since}.",
+        "bot.now_awake": "Not asleep right now.",
+        "bot.stats_sleep": "sleep {total}, sleeps: {count}",
         "tg.started": "Telegram: alerts and commands for {count} chat(s)",
         "tg.unknown_chat": (
             "Telegram: ignored a message from chat {chat}. To allow it, add {chat} to "
@@ -206,6 +218,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "noggin-compass\n"
             "/now - где сейчас голова и не пора ли поворачивать\n"
             "/stats - время по сторонам за сегодня\n"
+            "/sleep - сон за сегодня\n"
             "/photo - снимок с камеры прямо сейчас\n"
             "/marked - тот же снимок с тем, что нашла программа\n"
             "Сигналы \"пора повернуть\" приходят сюда сами."
@@ -232,6 +245,17 @@ MESSAGES: dict[str, dict[str, str]] = {
             "не видно {unknown}\n"
             "поворотов: {turns}"
         ),
+        "sleep.title": "Сон в кроватке (сутки с {start}):",
+        "sleep.day": "{total}, засыпаний: {count}, самый долгий: {longest}",
+        "sleep.day_title": "Сон за {date}:",
+        "sleep.period": "{start}-{end}  {duration}",
+        "sleep.ongoing": "{start}-сейчас  {duration}",
+        "sleep.none": "За эти дни сна не найдено. Сон определяется по движению малыша, а старые версии программы его не записывали.",
+        "bot.cmd.sleep": "сон за сегодня",
+        "bot.sleep": "Сон с {start}: {total}, засыпаний: {count}, самый долгий: {longest}",
+        "bot.now_asleep": "Спит уже {duration}, с {since}.",
+        "bot.now_awake": "Сейчас не спит.",
+        "bot.stats_sleep": "сон {total}, засыпаний: {count}",
         "tg.started": "Telegram: сигналы и команды для чатов: {count}",
         "tg.unknown_chat": (
             "Telegram: сообщение из чата {chat} пропущено. Чтобы разрешить его, добавьте {chat} в "

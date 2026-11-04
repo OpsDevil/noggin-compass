@@ -14,10 +14,12 @@ import numpy as np
 from .config import Config, DetectorConfig, load_config, load_dotenv
 from .head import HeadEstimate, Side, estimate_head, side_label
 from .i18n import LANGUAGES, set_language, t
+from .motion import MotionMeter
 from .notify import Notifier, load_history, monitor_from_config
 from .pose import Person, PoseDetector
 from .preview import draw, fit
 from .report import build_report, day_bounds, day_of, fmt_duration, parse_day_start, render
+from .sleep import render_sleep, sleep_days
 from .source import open_source, preprocess
 from .storage import Storage
 from .tracker import SideTracker
@@ -57,6 +59,7 @@ def save_snapshot(
     person: Person | None,
     root: str,
     detector: DetectorConfig,
+    motion: float | None = None,
 ) -> None:
     """Save the clean frame (to review it or fine-tune the model later), a _debug copy with the
     overlay, and a line in analysis.jsonl with everything that was detected. The jsonl is enough
@@ -73,6 +76,7 @@ def save_snapshot(
         "side": estimate.side.value,
         "score": None if estimate.score is None else round(estimate.score, 3),
         "method": estimate.code,
+        "motion": None if motion is None else round(motion, 4),
         "model": detector.model,
         "imgsz": detector.imgsz,
         "upright": detector.upright,
@@ -99,6 +103,7 @@ def run(cfg: Config, args: argparse.Namespace) -> None:
     )
     storage = Storage(cfg.storage.db_path)
     tracker = SideTracker(cfg.tracking.confirm_seconds, cfg.tracking.gap_seconds)
+    motion_meter = MotionMeter()
     monitor = monitor_from_config(cfg)
     notifier = Notifier(cfg)
     notifier.start()
@@ -114,7 +119,8 @@ def run(cfg: Config, args: argparse.Namespace) -> None:
                 history_loaded = True
             frame = preprocess(frame, cfg.camera.rotate, cfg.camera.roi)
             estimate, person = analyze(detector, frame, cfg, ts.timestamp())
-            storage.add(ts, estimate)
+            motion = motion_meter.update(frame, None if person is None else person.box, ts.timestamp())
+            storage.add(ts, estimate, motion)
             monitor.add(tracker.update(ts, estimate.side))
             current = tracker.current
             now = ts.timestamp()
@@ -141,7 +147,9 @@ def run(cfg: Config, args: argparse.Namespace) -> None:
             debug = draw(frame, person, estimate, cfg.detector.min_keypoint_conf, cfg.head.mirrored)
             if snapshot_due:
                 last_snapshot = now
-                save_snapshot(frame, debug, ts, estimate, person, cfg.storage.snapshots_dir, cfg.detector)
+                save_snapshot(
+                    frame, debug, ts, estimate, person, cfg.storage.snapshots_dir, cfg.detector, motion
+                )
             if args.preview:
                 cv2.imshow(PREVIEW_WINDOW, fit(debug))
                 if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
@@ -168,6 +176,8 @@ def report(cfg: Config, args: argparse.Namespace) -> None:
     storage = Storage(cfg.storage.db_path)
     try:
         samples = storage.samples(since, until)
+        # From 12 hours earlier, so that a sleep that began before the first day is recognised.
+        activity = storage.activity(since - timedelta(hours=12), until)
     finally:
         storage.close()
     summaries = build_report(
@@ -178,6 +188,10 @@ def report(cfg: Config, args: argparse.Namespace) -> None:
         day_start=day_start,
     )
     print(render(summaries, day_start, timeline_days=args.timelines))
+    first = summaries[0].day if summaries else day_of(since, day_start)
+    days = [d for d in sleep_days(activity, cfg.sleep, day_start) if d.day >= first]
+    print()
+    print(render_sleep(days, day_start, detail_days=args.timelines))
 
 
 def build_parser() -> argparse.ArgumentParser:

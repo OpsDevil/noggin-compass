@@ -181,6 +181,6 @@ def test_bot_sends_photo_as_multipart():
 def test_command_menu_lists_photos_only_when_allowed():
     cfg = Config()
     cfg.telegram.token, cfg.telegram.chat_ids = "token", [10]
-    assert [name for name, _ in notify.Notifier(cfg).bot.commands] == ["now", "stats"]
+    assert [name for name, _ in notify.Notifier(cfg).bot.commands] == ["now", "stats", "sleep"]
     cfg.telegram.photos = True
-    assert [name for name, _ in notify.Notifier(cfg).bot.commands] == ["now", "stats", "photo", "marked"]
+    assert [name for name, _ in notify.Notifier(cfg).bot.commands] == ["now", "stats", "sleep", "photo", "marked"]

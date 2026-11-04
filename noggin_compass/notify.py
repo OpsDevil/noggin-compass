@@ -18,6 +18,7 @@ from .config import Config
 from .head import HeadEstimate, Side, side_label
 from .i18n import t
 from .report import build_report, day_bounds, day_of, fmt_duration, parse_day_start, reclassify
+from .sleep import period_lines, sleep_days, sleep_state
 from .pose import Person
 from .preview import draw, fit
 from .storage import Storage
@@ -27,6 +28,8 @@ from .tracker import Segment, build_segments
 log = logging.getLogger(__name__)
 
 SYSTEM_SOUNDS = Path("/System/Library/Sounds")
+# How far back sleep is looked for, to see a sleep that began before the period asked about.
+SLEEP_LOOKBACK = timedelta(hours=12)
 SOUND_REPEATS = 3
 
 
@@ -106,7 +109,9 @@ class Notifier:
         self.status = Status()
         self.frame: Frame | None = None
         token, chat_ids = resolve_credentials(cfg.telegram.token, cfg.telegram.chat_ids)
-        commands = [("now", t("bot.cmd.now")), ("stats", t("bot.cmd.stats"))]
+        commands = [
+            ("now", t("bot.cmd.now")), ("stats", t("bot.cmd.stats")), ("sleep", t("bot.cmd.sleep"))
+        ]
         if cfg.telegram.photos:
             commands += [("photo", t("bot.cmd.photo")), ("marked", t("bot.cmd.marked"))]
         self.bot = TelegramBot(token, chat_ids, self.handle_command, commands=commands) if token else None
@@ -143,6 +148,8 @@ class Notifier:
             return self.now_text()
         if command == "/stats":
             return self.stats_text()
+        if command == "/sleep":
+            return self.sleep_text()
         if command in ("/photo", "/marked"):
             return self.photo(marked=command == "/marked")
         return t("bot.help")
@@ -185,7 +192,46 @@ class Notifier:
             lines.append(t("bot.turn", turn=side_label(status.due.turn_to)))
         elif side in (Side.LEFT, Side.RIGHT):
             lines.append(t("bot.ok"))
+        if side != Side.ABSENT:
+            now = status.time or datetime.now()
+            asleep, period = sleep_state(self._activity(now - SLEEP_LOOKBACK, now), self.cfg.sleep, now)
+            if asleep:
+                lines.append(t("bot.now_asleep", duration=fmt_duration(period.seconds), since=f"{period.start:%H:%M}"))
+            elif asleep is not None:
+                lines.append(t("bot.now_awake"))
         return "\n".join(lines)
+
+    def _activity(self, since: datetime, until: datetime) -> list:
+        storage = Storage(self.cfg.storage.db_path)
+        try:
+            return storage.activity(since, until)
+        finally:
+            storage.close()
+
+    def _today_sleep(self, now: datetime):
+        """Today's sleep (report day) and the day start. Data from before the day start is read
+        too, so that a sleep that began earlier is recognised."""
+        day_start = parse_day_start(self.cfg.tracking.day_starts_at)
+        since, until = day_bounds(day_of(now, day_start), day_start)
+        days = sleep_days(self._activity(since - SLEEP_LOOKBACK, until), self.cfg.sleep, day_start)
+        today = [d for d in days if d.day == day_of(now, day_start)]
+        return (today[0] if today else None), since
+
+    def sleep_text(self) -> str:
+        now = self.status.time or datetime.now()
+        day, since = self._today_sleep(now)
+        if day is None:
+            return t("sleep.none")
+        lines = [
+            t(
+                "bot.sleep",
+                start=f"{since:%d.%m %H:%M}",
+                total=fmt_duration(day.total),
+                count=len(day.periods),
+                longest=fmt_duration(day.longest),
+            )
+        ]
+        return "\n".join(lines + period_lines(day.periods, now))
 
     def stats_text(self) -> str:
         day_start = parse_day_start(self.cfg.tracking.day_starts_at)
@@ -206,7 +252,7 @@ class Notifier:
         if not summaries:
             return t("report.no_data")
         s = summaries[-1]
-        return t(
+        text = t(
             "bot.stats",
             start=f"{since:%d.%m %H:%M}",
             left=fmt_duration(s.totals[Side.LEFT]),
@@ -218,6 +264,10 @@ class Notifier:
             unknown=fmt_duration(s.totals[Side.UNKNOWN]),
             turns=s.turns,
         )
+        day, _ = self._today_sleep(now)
+        if day is not None:
+            text += "\n" + t("bot.stats_sleep", total=fmt_duration(day.total), count=len(day.periods))
+        return text
 
 
 def load_history(storage: Storage, cfg: Config, until: datetime) -> list[Segment]:

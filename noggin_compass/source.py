@@ -22,6 +22,10 @@ os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
 # Tapo sends a non-standard SEI in every frame, and ffmpeg logs it as an error. Keep only fatal
 # messages: dropped connections show up anyway as reconnects.
 os.environ.setdefault("OPENCV_FFMPEG_LOGLEVEL", "8")
+if "OPENCV_LOG_LEVEL" not in os.environ:
+    # OpenCV's own warnings ("backend can't be used to capture by name") only repeat what the
+    # reconnect message says.
+    cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
 
 log = logging.getLogger(__name__)
 
@@ -72,9 +76,12 @@ class LiveSource:
         self._thread.start()
 
     def _open(self) -> cv2.VideoCapture:
-        cap = cv2.VideoCapture(self.source)
-        if isinstance(self.source, str):
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        if not isinstance(self.source, str):
+            return cv2.VideoCapture(self.source)
+        # Only ffmpeg: when it can't connect, OpenCV would otherwise try to read the URL as an image
+        # sequence and print it, password included, to stderr.
+        cap = cv2.VideoCapture(self.source, cv2.CAP_FFMPEG)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         return cap
 
     def _reader(self) -> None:

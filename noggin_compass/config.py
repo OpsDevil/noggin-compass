@@ -90,6 +90,19 @@ class TelegramConfig:
 
 
 @dataclass
+class SleepConfig:
+    # A frame counts as movement when this share of the baby's area changed since the previous one.
+    frame_motion: float = 0.02
+    # A minute is restless when at least this share of its frames had movement.
+    restless_share: float = 0.1
+    # Asleep after this many still minutes in a row; the sleep starts at the first of them.
+    fall_asleep_minutes: int = 10
+    # Awake after wake_minutes restless minutes within wake_window_minutes.
+    wake_minutes: int = 3
+    wake_window_minutes: int = 5
+
+
+@dataclass
 class StorageConfig:
     db_path: str = "data/noggin-compass.db"
     snapshots_dir: str = "data/snapshots"
@@ -107,6 +120,7 @@ class Config:
     tracking: TrackingConfig = field(default_factory=TrackingConfig)
     alerts: AlertsConfig = field(default_factory=AlertsConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
+    sleep: SleepConfig = field(default_factory=SleepConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
 
 

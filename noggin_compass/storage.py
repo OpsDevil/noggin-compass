@@ -22,12 +22,15 @@ class Storage:
             " ts REAL NOT NULL, side TEXT NOT NULL, score REAL, method TEXT)"
         )
         self.conn.execute("CREATE INDEX IF NOT EXISTS samples_ts ON samples(ts)")
+        columns = {row[1] for row in self.conn.execute("PRAGMA table_info(samples)")}
+        if "motion" not in columns:  # databases from before sleep tracking
+            self.conn.execute("ALTER TABLE samples ADD COLUMN motion REAL")
         self._pending = 0
 
-    def add(self, ts: datetime, estimate: HeadEstimate) -> None:
+    def add(self, ts: datetime, estimate: HeadEstimate, motion: float | None = None) -> None:
         self.conn.execute(
-            "INSERT INTO samples (ts, side, score, method) VALUES (?, ?, ?, ?)",
-            (ts.timestamp(), estimate.side.value, estimate.score, estimate.code),
+            "INSERT INTO samples (ts, side, score, method, motion) VALUES (?, ?, ?, ?, ?)",
+            (ts.timestamp(), estimate.side.value, estimate.score, estimate.code, motion),
         )
         self._pending += 1
         if self._pending >= COMMIT_EVERY:
@@ -46,6 +49,18 @@ class Storage:
         return [
             (datetime.fromtimestamp(ts), Side(side), score)
             for ts, side, score in self.conn.execute(query, (lo, hi))
+        ]
+
+    def activity(
+        self, since: datetime | None = None, until: datetime | None = None
+    ) -> list[tuple[datetime, Side, float | None]]:
+        """(time, side, motion) for sleep tracking. motion is None where it was not measured."""
+        query = "SELECT ts, side, motion FROM samples WHERE ts >= ? AND ts < ? ORDER BY ts"
+        lo = since.timestamp() if since else 0.0
+        hi = until.timestamp() if until else float("inf")
+        return [
+            (datetime.fromtimestamp(ts), Side(side), motion)
+            for ts, side, motion in self.conn.execute(query, (lo, hi))
         ]
 
     def close(self) -> None:

@@ -63,6 +63,15 @@ telegram:
   # Off by default: the pictures go through Telegram.
   photos: false
 
+sleep:
+  # Sleep is told from movement: a baby lying still for a while is asleep. Lying still with open
+  # eyes also counts as sleep, and only the crib is seen.
+  frame_motion: 0.02        # a frame counts as movement when this share of the baby's area changed
+  restless_share: 0.1       # a minute is restless when this share of its frames had movement
+  fall_asleep_minutes: 10   # asleep after this many still minutes in a row
+  wake_minutes: 3           # awake after this many restless minutes...
+  wake_window_minutes: 5    # ...within this many minutes
+
 storage:
   db_path: data/noggin-compass.db
   snapshots_dir: data/snapshots

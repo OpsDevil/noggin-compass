@@ -11,7 +11,9 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from . import keychain
 from .i18n import t
@@ -24,6 +26,12 @@ KEYCHAIN_SERVICE = "noggin-compass-telegram"
 API = "https://api.telegram.org/bot{token}/{method}"
 POLL_TIMEOUT = 30
 RETRY_DELAY = 10
+
+
+@dataclass
+class Photo:
+    jpeg: bytes
+    caption: str = ""
 
 
 def resolve_credentials(token: str | None, chat_ids: list[int]) -> tuple[str | None, list[int]]:
@@ -40,23 +48,46 @@ class TelegramBot:
         self,
         token: str,
         chat_ids: list[int],
-        handler: Callable[[str], str | None],
+        handler: Callable[[str], str | Photo | None],
         opener: Callable = urllib.request.urlopen,
+        commands: list[tuple[str, str]] = (),
     ):
         self.token = token
         self.chat_ids = set(chat_ids)
         self.handler = handler  # command text -> reply, or None if there is nothing to say
+        self.commands = list(commands)  # shown in the Telegram command menu
         self._open = opener
         self._running = False
 
-    def call(self, method: str, **params) -> object:
-        data = urllib.parse.urlencode(params).encode()
-        url = API.format(token=self.token, method=method)
-        with self._open(url, data=data, timeout=POLL_TIMEOUT + 10) as response:
+    def _post(self, method: str, data: bytes, content_type: str) -> object:
+        request = urllib.request.Request(
+            API.format(token=self.token, method=method), data=data, headers={"Content-Type": content_type}
+        )
+        with self._open(request, timeout=POLL_TIMEOUT + 10) as response:
             body = json.load(response)
         if not body.get("ok"):
             raise RuntimeError(body.get("description", "Telegram error"))
         return body["result"]
+
+    def call(self, method: str, **params) -> object:
+        data = urllib.parse.urlencode(params).encode()
+        return self._post(method, data, "application/x-www-form-urlencoded")
+
+    def send_photo(self, chat: int, photo: Photo) -> None:
+        boundary = uuid.uuid4().hex
+        parts = [
+            f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode()
+            for name, value in (("chat_id", chat), ("caption", photo.caption))
+        ]
+        parts.append(
+            f'--{boundary}\r\nContent-Disposition: form-data; name="photo"; filename="frame.jpg"\r\n'
+            "Content-Type: image/jpeg\r\n\r\n".encode() + photo.jpeg + b"\r\n"
+        )
+        parts.append(f"--{boundary}--\r\n".encode())
+        try:
+            self._post("sendPhoto", b"".join(parts), f"multipart/form-data; boundary={boundary}")
+        except Exception as error:
+            log.warning(t("tg.error", error=error))
 
     def send(self, text: str, chat_ids: list[int] | None = None) -> None:
         for chat in chat_ids or sorted(self.chat_ids):
@@ -79,7 +110,9 @@ class TelegramBot:
                 log.info(t("tg.unknown_chat", chat=chat))
                 continue
             reply = self.handler(text)
-            if reply:
+            if isinstance(reply, Photo):
+                self.send_photo(chat, reply)
+            elif reply:
                 self.send(reply, [chat])
         return offset
 
@@ -97,6 +130,12 @@ class TelegramBot:
 
     def start(self) -> None:
         self._running = True
+        if self.commands:
+            try:
+                menu = [{"command": name, "description": text} for name, text in self.commands]
+                self.call("setMyCommands", commands=json.dumps(menu, ensure_ascii=False))
+            except Exception as error:
+                log.warning(t("tg.error", error=error))
         threading.Thread(target=self._poll, daemon=True).start()
 
     def stop(self) -> None:

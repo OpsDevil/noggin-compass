@@ -85,6 +85,8 @@ class TelegramConfig:
     # Chats that get alerts and may send commands. NOGGIN_TELEGRAM_CHAT_IDS (comma-separated)
     # takes precedence.
     chat_ids: list[int] = field(default_factory=list)
+    # Allow /photo and /marked. Off by default: pictures of the baby would go through Telegram.
+    photos: bool = False
 
 
 @dataclass

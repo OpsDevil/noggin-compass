@@ -86,8 +86,16 @@ MESSAGES: dict[str, dict[str, str]] = {
             "noggin-compass\n"
             "/now - where the head is now and whether it is time to turn\n"
             "/stats - time per side today\n"
+            "/photo - a picture from the camera right now\n"
+            "/marked - the same picture with what the program detected\n"
             "Turn alerts arrive here by themselves."
         ),
+        "bot.cmd.now": "where the head is now",
+        "bot.cmd.stats": "time per side today",
+        "bot.cmd.photo": "picture from the camera now",
+        "bot.cmd.marked": "picture with the detected points",
+        "bot.photos_off": "Pictures are off. To allow /photo and /marked, set telegram.photos: true in the config.",
+        "bot.photo_caption": "{time}, head turned {side} (score {score})",
         "bot.no_data": "No data yet: the program has just started.",
         "bot.now_side": "The head is turned {side}, on this side for {duration}.",
         "bot.now_center": "The head is straight.",
@@ -196,8 +204,16 @@ MESSAGES: dict[str, dict[str, str]] = {
             "noggin-compass\n"
             "/now - где сейчас голова и не пора ли поворачивать\n"
             "/stats - время по сторонам за сегодня\n"
+            "/photo - снимок с камеры прямо сейчас\n"
+            "/marked - тот же снимок с тем, что нашла программа\n"
             "Сигналы \"пора повернуть\" приходят сюда сами."
         ),
+        "bot.cmd.now": "где сейчас голова",
+        "bot.cmd.stats": "время по сторонам за сегодня",
+        "bot.cmd.photo": "снимок с камеры сейчас",
+        "bot.cmd.marked": "снимок с найденными точками",
+        "bot.photos_off": "Снимки выключены. Чтобы разрешить /photo и /marked, укажите telegram.photos: true в конфиге.",
+        "bot.photo_caption": "{time}, голова: {side} (score {score})",
         "bot.no_data": "Данных пока нет: программа только запустилась.",
         "bot.now_side": "Голова повёрнута {side}, на этой стороне уже {duration}.",
         "bot.now_center": "Голова прямо.",

@@ -59,6 +59,9 @@ telegram:
   # Chats that get alerts and may use /now and /stats; NOGGIN_TELEGRAM_CHAT_IDS (comma-separated)
   # takes precedence. Unknown chats are ignored and their ids are printed in the log.
   chat_ids: []
+  # Allow /photo and /marked (a picture from the camera, plain or with the detected points).
+  # Off by default: the pictures go through Telegram.
+  photos: false
 
 storage:
   db_path: data/noggin-compass.db

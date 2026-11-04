@@ -86,8 +86,8 @@ Everything runs on your own computer:
   telemetry is switched off;
 * nothing stops you from blocking the camera's internet access in your router, RTSP keeps
   working locally;
-* Telegram is optional: if you turn it on, alert texts and statistics (never pictures) go
-  through Telegram.
+* Telegram is optional: if you turn it on, alert texts and statistics go through Telegram.
+  Pictures only go there if you also allow `/photo` with `telegram.photos: true`.
 
 ## Hardware
 
@@ -218,6 +218,10 @@ whether it is time to turn) and `/stats` (time per side today):
    NOGGIN_TELEGRAM_CHAT_IDS=123456789
    ```
 
+With `telegram.photos: true` the bot also sends a picture from the camera right now: `/photo` as
+it is, `/marked` with the detected points, as in the preview. This is off by default, since the
+pictures go through Telegram.
+
 The token and chat ids can also go into `config.yaml` (`telegram.token`, `telegram.chat_ids`). The
 token is looked up in this order: `NOGGIN_TELEGRAM_TOKEN`, `telegram.token`, the Keychain.
 
@@ -260,7 +264,8 @@ All options with their defaults are in [`config.example.yaml`](config.example.ya
 | `alerts.sound_file` | `Funk` | Which sound: the name of a macOS system sound (Funk, Glass, Sosumi, Basso...) or a path to a sound file. |
 | **telegram** | | |
 | `telegram.token` | not set | Bot token from @BotFather. The `NOGGIN_TELEGRAM_TOKEN` environment variable takes precedence; if neither is set, the macOS Keychain entry `noggin-compass-telegram` is used. |
-| `telegram.chat_ids` | `[]` | Chats that get alerts and may use `/now` and `/stats`. The `NOGGIN_TELEGRAM_CHAT_IDS` environment variable (comma-separated) takes precedence. |
+| `telegram.chat_ids` | `[]` | Chats that get alerts and may use the bot commands. The `NOGGIN_TELEGRAM_CHAT_IDS` environment variable (comma-separated) takes precedence. |
+| `telegram.photos` | `false` | Allow `/photo` and `/marked`: a picture from the camera, plain or with the detected points. Off by default because the pictures go through Telegram. |
 | **storage** | | |
 | `storage.db_path` | `data/noggin-compass.db` | SQLite file with the per-second results. |
 | `storage.snapshots_dir` | `data/snapshots` | Where snapshots are saved. |

@@ -120,6 +120,7 @@ def run(cfg: Config, args: argparse.Namespace) -> None:
             if alert is not None:
                 notifier.alert(alert)
             notifier.update(ts, current, monitor)
+            notifier.set_frame(frame, person, estimate, ts)
 
             if now - last_status >= STATUS_EVERY_SECONDS:
                 last_status = now

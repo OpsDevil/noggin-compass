@@ -3,6 +3,7 @@ import json
 import urllib.parse
 from datetime import datetime, timedelta
 
+import numpy as np
 import pytest
 
 from noggin_compass import keychain, notify, telegram
@@ -11,6 +12,7 @@ from noggin_compass.config import Config
 from noggin_compass.head import HeadEstimate, Side
 from noggin_compass.i18n import set_language
 from noggin_compass.storage import Storage
+from noggin_compass.telegram import Photo
 from noggin_compass.tracker import Segment
 
 T0 = datetime(2026, 11, 4, 22, 0)
@@ -24,15 +26,21 @@ class FakeTelegram:
         self.calls = []
         self.updates = list(updates)
 
-    def __call__(self, url, data, timeout):
-        method = url.rsplit("/", 1)[1]
-        params = dict(urllib.parse.parse_qsl(data.decode()))
+    def __call__(self, request, timeout):
+        method = request.full_url.rsplit("/", 1)[1]
+        if request.get_header("Content-type", "").startswith("multipart"):
+            params = {"multipart": request.data}
+        else:
+            params = dict(urllib.parse.parse_qsl(request.data.decode()))
         self.calls.append((method, params))
         result = self.updates if method == "getUpdates" else {"message_id": 1}
         return io.BytesIO(json.dumps({"ok": True, "result": result}).encode())
 
     def sent(self):
         return [(int(p["chat_id"]), p["text"]) for m, p in self.calls if m == "sendMessage"]
+
+    def photos(self):
+        return [p["multipart"] for m, p in self.calls if m == "sendPhoto"]
 
 
 @pytest.fixture(autouse=True)
@@ -143,3 +151,36 @@ def test_sound_by_name_or_file(tmp_path):
     own = tmp_path / "beep.wav"
     own.write_bytes(b"RIFF")
     assert notify.sound_path(str(own)) == str(own)
+
+
+def test_photo_commands(tmp_path):
+    cfg = Config()
+    notifier = notify.Notifier(cfg)
+    assert "telegram.photos" in notifier.handle_command("/photo")
+
+    cfg.telegram.photos = True
+    assert "No data" in notifier.handle_command("/photo")
+    image = np.full((200, 300, 3), 120, dtype=np.uint8)
+    notifier.set_frame(image, None, HeadEstimate(Side.LEFT, 0.62), T0)
+    for command in ("/photo", "/marked"):
+        photo = notifier.handle_command(command)
+        assert isinstance(photo, Photo)
+        assert photo.jpeg[:2] == b"\xff\xd8"
+        assert photo.caption == "22:00:00, head turned left (score +0.62)"
+
+
+def test_bot_sends_photo_as_multipart():
+    fake = FakeTelegram()
+    bot = telegram.TelegramBot("token", [10], handler=lambda text: Photo(b"\xff\xd8jpeg", "caption"), opener=fake)
+    bot.handle_updates([{"update_id": 1, "message": {"chat": {"id": 10}, "text": "/photo"}}])
+    (body,) = fake.photos()
+    assert b'name="chat_id"' in body and b"10" in body
+    assert b'name="photo"; filename="frame.jpg"' in body and b"\xff\xd8jpeg" in body
+
+
+def test_command_menu_lists_photos_only_when_allowed():
+    cfg = Config()
+    cfg.telegram.token, cfg.telegram.chat_ids = "token", [10]
+    assert [name for name, _ in notify.Notifier(cfg).bot.commands] == ["now", "stats"]
+    cfg.telegram.photos = True
+    assert [name for name, _ in notify.Notifier(cfg).bot.commands] == ["now", "stats", "photo", "marked"]

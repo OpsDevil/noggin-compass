@@ -10,13 +10,18 @@ import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
+import cv2
+import numpy as np
+
 from .balance import Alert, BalanceMonitor
 from .config import Config
-from .head import Side, side_label
+from .head import HeadEstimate, Side, side_label
 from .i18n import t
 from .report import build_report, day_bounds, day_of, fmt_duration, parse_day_start, reclassify
+from .pose import Person
+from .preview import draw, fit
 from .storage import Storage
-from .telegram import TelegramBot, resolve_credentials
+from .telegram import Photo, TelegramBot, resolve_credentials
 from .tracker import Segment, build_segments
 
 log = logging.getLogger(__name__)
@@ -85,12 +90,26 @@ class Status:
     due: Alert | None = None
 
 
+@dataclass
+class Frame:
+    """The latest analysed frame, for /photo and /marked."""
+
+    image: np.ndarray
+    person: Person | None
+    estimate: HeadEstimate
+    time: datetime
+
+
 class Notifier:
     def __init__(self, cfg: Config):
         self.cfg = cfg
         self.status = Status()
+        self.frame: Frame | None = None
         token, chat_ids = resolve_credentials(cfg.telegram.token, cfg.telegram.chat_ids)
-        self.bot = TelegramBot(token, chat_ids, self.handle_command) if token else None
+        commands = [("now", t("bot.cmd.now")), ("stats", t("bot.cmd.stats"))]
+        if cfg.telegram.photos:
+            commands += [("photo", t("bot.cmd.photo")), ("marked", t("bot.cmd.marked"))]
+        self.bot = TelegramBot(token, chat_ids, self.handle_command, commands=commands) if token else None
 
     def start(self) -> None:
         if self.bot is not None:
@@ -106,6 +125,9 @@ class Notifier:
             now, current, monitor.stint(now, current), monitor.totals(now, current), monitor.due(now, current)
         )
 
+    def set_frame(self, image: np.ndarray, person: Person | None, estimate: HeadEstimate, time: datetime) -> None:
+        self.frame = Frame(image, person, estimate, time)
+
     def alert(self, alert: Alert) -> None:
         text = format_alert(alert, self.cfg.alerts.window_hours)
         log.warning(text)
@@ -115,13 +137,31 @@ class Notifier:
         if self.bot is not None:
             self.bot.send(text)
 
-    def handle_command(self, text: str) -> str:
+    def handle_command(self, text: str) -> str | Photo:
         command = text.strip().split()[0].split("@")[0].lower() if text.strip() else ""
         if command == "/now":
             return self.now_text()
         if command == "/stats":
             return self.stats_text()
+        if command in ("/photo", "/marked"):
+            return self.photo(marked=command == "/marked")
         return t("bot.help")
+
+    def photo(self, marked: bool) -> str | Photo:
+        if not self.cfg.telegram.photos:
+            return t("bot.photos_off")
+        frame = self.frame
+        if frame is None:
+            return t("bot.no_data")
+        image = frame.image
+        if marked:
+            image = draw(image, frame.person, frame.estimate, self.cfg.detector.min_keypoint_conf, self.cfg.head.mirrored)
+        ok, jpeg = cv2.imencode(".jpg", fit(image, 1600), [cv2.IMWRITE_JPEG_QUALITY, 85])
+        if not ok:
+            return t("bot.no_data")
+        score = f"{frame.estimate.score:+.2f}" if frame.estimate.score is not None else "-"
+        caption = t("bot.photo_caption", time=f"{frame.time:%H:%M:%S}", side=side_label(frame.estimate.side), score=score)
+        return Photo(jpeg.tobytes(), caption)
 
     def now_text(self) -> str:
         status = self.status

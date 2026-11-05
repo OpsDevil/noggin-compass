@@ -114,10 +114,11 @@ class SleepConfig:
     # far longer.
     wake_minutes: int = 7
     wake_window_minutes: int = 10
-    # Out of the crib only after this many minutes in a row without the baby. In daylight the
-    # network loses a still baby in a white sleep sack for a minute or two, while a baby taken out
-    # stays out far longer (4 to 40 minutes on the first day).
-    out_minutes: int = 3
+    # Out of the crib only after this many minutes in a row without the baby. Above 1, a minute or
+    # two in which the network lost a still baby (a white sleep sack in daylight) does not end the
+    # sleep. Off by default: in an empty crib the network finds "people" in the sheet's pattern,
+    # those frames look still, and joined with the short gaps between them they made up sleep.
+    out_minutes: int = 1
 
 
 @dataclass

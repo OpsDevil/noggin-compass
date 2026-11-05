@@ -73,7 +73,7 @@ sleep:
   fall_asleep_window_minutes: 10  # ...within this many minutes
   wake_minutes: 7           # awake after this many restless minutes...
   wake_window_minutes: 10   # ...within this many minutes
-  out_minutes: 3            # taken out of the crib after this many minutes in a row without the baby
+  out_minutes: 1            # taken out of the crib after this many minutes in a row without the baby
 
 storage:
   db_path: data/noggin-compass.db

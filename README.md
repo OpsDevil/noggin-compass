@@ -254,10 +254,8 @@ barely moves, an awake one turns, kicks and waves its arms. This is how sleep ac
   `sleep.fall_asleep_window_minutes`, counted from the first of them. Not "in a row": falling
   asleep, a baby often waves its arms with eyes already closed.
 * The baby is **awake** after `sleep.wake_minutes` restless minutes within
-  `sleep.wake_window_minutes`, or once it has been out of the crib for `sleep.out_minutes` in a
-  row. Twitches and head turns during sleep do not count, even when they go on for a few minutes in
-  a row. Neither does a minute or two "out of the crib": in daylight the network sometimes loses a
-  still baby in a white sleep sack, while a baby that is really taken out stays out longer.
+  `sleep.wake_window_minutes`, or as soon as it is taken out of the crib. Twitches and head turns
+  during sleep do not count, even when they go on for a few minutes in a row.
 
 `noggin-compass report` shows sleep per day and the list of sleeps, `/sleep` in Telegram the same
 for the last 24 hours, `/now` whether the baby is asleep right now. The raw movement of every frame
@@ -332,7 +330,7 @@ All options with their defaults are in [`config.example.yaml`](config.example.ya
 | `sleep.fall_asleep_window_minutes` | `10` | ...within this many minutes; the sleep starts at the first still one. Set both to the same number to require still minutes in a row. |
 | `sleep.wake_minutes` | `7` | Awake after this many restless minutes... |
 | `sleep.wake_window_minutes` | `10` | ...within this many minutes. |
-| `sleep.out_minutes` | `3` | The baby counts as taken out of the crib only after this many minutes in a row without being seen. Raise it if a sleeping baby is often lost for longer (a sleep ends while it was asleep in the crib); lower it to notice short trips out of the crib. |
+| `sleep.out_minutes` | `1` | The baby counts as taken out of the crib only after this many minutes in a row without being seen. In daylight the network sometimes loses a still baby in a white sleep sack for a minute or two, and the sleep ends. 2-3 keeps such a sleep, but if the network finds "people" in an empty crib (a patterned sheet, an empty sleep sack), it can count sleep that never happened. Check the snapshots of an empty crib before raising it. |
 | **storage** | | |
 | `storage.db_path` | `data/noggin-compass.db` | SQLite file with the per-second results. |
 | `storage.snapshots_dir` | `data/snapshots` | Where snapshots are saved. |

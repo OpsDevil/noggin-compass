@@ -62,12 +62,19 @@ def test_waving_arms_while_falling_asleep():
     assert period.start == minutes_after(3)
 
 
+def test_short_gaps_end_sleep_by_default():
+    # Joining short gaps made up sleep in an empty crib, so by default any gap ends the sleep.
+    periods = find_sleep(frames("s" * 12 + "o" + "s" * 10), CFG)
+    assert [(p.start, p.end) for p in periods] == [(T0, minutes_after(12)), (minutes_after(13), minutes_after(23))]
+
+
 def test_baby_lost_by_the_network_for_a_minute_or_two_sleeps_on():
     # In daylight a still baby in a white sleep sack is not found for a minute or two.
-    (period,) = find_sleep(frames("s" * 12 + "o" + "ss" + "oo" + "s" * 10), CFG)
+    cfg = SleepConfig(out_minutes=3)
+    (period,) = find_sleep(frames("s" * 12 + "o" + "ss" + "oo" + "s" * 10), cfg)
     assert (period.start, period.end) == (T0, minutes_after(27))
     # Three minutes or more is being taken out of the crib.
-    periods = find_sleep(frames("s" * 12 + "ooo" + "s" * 10), CFG)
+    periods = find_sleep(frames("s" * 12 + "ooo" + "s" * 10), cfg)
     assert [(p.start, p.end) for p in periods] == [(T0, minutes_after(12)), (minutes_after(15), minutes_after(25))]
 
 

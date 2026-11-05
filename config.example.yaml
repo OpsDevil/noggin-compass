@@ -80,5 +80,5 @@ sleep:
 storage:
   db_path: data/noggin-compass.db
   snapshots_dir: data/snapshots
-  snapshot_every_seconds: 0 # every N seconds save a frame, an annotated copy and a line in
-                            # analysis.jsonl with the keypoints; 0 turns it off
+  snapshot_every_seconds: 0 # every N seconds save a frame and a line in analysis.jsonl with the
+                            # keypoints; 0 turns it off. `noggin-compass draw` shows the points

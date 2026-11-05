@@ -346,7 +346,7 @@ All options with their defaults are in [`config.example.yaml`](config.example.ya
 | **storage** | | |
 | `storage.db_path` | `data/noggin-compass.db` | SQLite file with the per-second results. |
 | `storage.snapshots_dir` | `data/snapshots` | Where snapshots are saved. |
-| `storage.snapshot_every_seconds` | `0` (off) | Every N seconds saves the frame, a copy with the detected points and a line in `analysis.jsonl` with all keypoints and the score. Use it to check the accuracy by eye or to recompute statistics later without running the network again. |
+| `storage.snapshot_every_seconds` | `0` (off) | Every N seconds saves the frame and a line in `analysis.jsonl` with all keypoints and the score. Use it to check the accuracy by eye, to recompute statistics later without running the network again, or to train a model of your own. To see what was detected on a snapshot, `uv run noggin-compass draw data/snapshots/2026-11-05/0812*.jpg` draws the points on a copy, as in the preview window. A frame takes about 500 KB, so one every 10 s is about 4 GB a day. |
 
 ## Models
 

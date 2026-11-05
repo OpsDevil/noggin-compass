@@ -55,7 +55,6 @@ def analyze(
 
 def save_snapshot(
     frame: np.ndarray,
-    debug: np.ndarray,
     ts: datetime,
     estimate: HeadEstimate,
     person: Person | None,
@@ -63,21 +62,23 @@ def save_snapshot(
     detector: DetectorConfig,
     motion: float | None = None,
 ) -> None:
-    """Save the clean frame (to review it or fine-tune the model later), a _debug copy with the
-    overlay, and a line in analysis.jsonl with everything that was detected. The jsonl is enough
-    to recompute stats and tune settings without running the model again."""
+    """Save the clean frame (to review it or fine-tune the model later) and a line in
+    analysis.jsonl with everything that was detected. The jsonl is enough to recompute stats and
+    tune settings without running the model again, and `draw` puts the detected points on a saved
+    frame when someone wants to look, so a drawn copy is not kept."""
     folder = Path(root) / f"{ts:%Y-%m-%d}"
     folder.mkdir(parents=True, exist_ok=True)
     score = f"{estimate.score:+.2f}" if estimate.score is not None else "na"
     name = f"{ts:%H%M%S}_{estimate.side.value}_{score}"
     cv2.imwrite(str(folder / f"{name}.jpg"), frame)
-    cv2.imwrite(str(folder / f"{name}_debug.jpg"), fit(debug))
     record = {
         "time": ts.isoformat(timespec="seconds"),
         "file": f"{name}.jpg",
         "side": estimate.side.value,
         "score": None if estimate.score is None else round(estimate.score, 3),
         "method": estimate.code,
+        # Direction from the shoulders to the top of the head, for drawing the snapshot later.
+        "axis": None if estimate.axis is None else [round(float(v), 3) for v in estimate.axis],
         "motion": None if motion is None else round(motion, 4),
         "model": detector.model,
         "imgsz": detector.imgsz,
@@ -150,15 +151,11 @@ def run(cfg: Config, args: argparse.Namespace) -> None:
                 cfg.storage.snapshot_every_seconds
                 and now - last_snapshot >= cfg.storage.snapshot_every_seconds
             )
-            if not (snapshot_due or args.preview):
-                continue
-            debug = draw(frame, person, estimate, cfg.detector.min_keypoint_conf, cfg.head.mirrored)
             if snapshot_due:
                 last_snapshot = now
-                save_snapshot(
-                    frame, debug, ts, estimate, person, cfg.storage.snapshots_dir, cfg.detector, motion
-                )
+                save_snapshot(frame, ts, estimate, person, cfg.storage.snapshots_dir, cfg.detector, motion)
             if args.preview:
+                debug = draw(frame, person, estimate, cfg.detector.min_keypoint_conf, cfg.head.mirrored)
                 cv2.imshow(PREVIEW_WINDOW, fit(debug))
                 if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
                     break
@@ -212,6 +209,51 @@ def report(cfg: Config, args: argparse.Namespace) -> None:
             print(t("cli.chart_saved", path=args.chart))
 
 
+def load_snapshot(path: Path, cfg: Config) -> tuple[np.ndarray, HeadEstimate, Person | None]:
+    """A saved frame and what was detected on it, from the analysis.jsonl next to it."""
+    frame = cv2.imread(str(path))
+    if frame is None:
+        raise SystemExit(t("cli.draw.unreadable", path=path))
+    record = None
+    analysis = path.parent / "analysis.jsonl"
+    if analysis.exists():
+        with open(analysis, encoding="utf-8") as lines:
+            record = next((r for r in map(json.loads, lines) if r["file"] == path.name), None)
+    if record is None:
+        raise SystemExit(t("cli.draw.no_record", path=path))
+    method, _, axis_source = record["method"].partition("/")
+    estimate = HeadEstimate(Side(record["side"]), record["score"], method, axis_source)
+    if not record["keypoints"]:
+        return frame, estimate, None
+    points = np.array(record["keypoints"], dtype=float)
+    person = Person(np.array(record["box"], dtype=float), 0.0, points[:, :2], points[:, 2])
+    if record.get("axis"):
+        estimate.axis = tuple(record["axis"])
+        return frame, estimate, person
+    # Snapshots saved before the axis was stored: recompute it. Without the first pass axis, on a
+    # frame without shoulders the arrow follows head.fallback_head_direction.
+    estimate.axis = estimate_head(
+        person.xy,
+        person.conf,
+        min_conf=cfg.detector.min_keypoint_conf,
+        center_threshold=cfg.head.center_threshold,
+        mirrored=cfg.head.mirrored,
+        fallback_head_direction=cfg.head.fallback_head_direction,
+    ).axis
+    return frame, estimate, person
+
+
+def draw_snapshots(cfg: Config, args: argparse.Namespace) -> None:
+    for path in args.snapshots:
+        frame, estimate, person = load_snapshot(path, cfg)
+        image = draw(frame, person, estimate, cfg.detector.min_keypoint_conf, cfg.head.mirrored)
+        folder = args.out or path.parent
+        folder.mkdir(parents=True, exist_ok=True)
+        out = folder / f"{path.stem}_drawn.jpg"
+        cv2.imwrite(str(out), fit(image))
+        print(t("cli.draw.saved", path=out))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="noggin-compass", description=t("cli.description"))
     parser.add_argument("-c", "--config", default="config.yaml", help=t("cli.help.config"))
@@ -230,6 +272,10 @@ def build_parser() -> argparse.ArgumentParser:
     report_cmd.add_argument("--date", type=date.fromisoformat, help=t("cli.help.date"))
     report_cmd.add_argument("--timelines", type=int, default=1, help=t("cli.help.timelines"))
     report_cmd.add_argument("--chart", metavar="FILE", help=t("cli.help.chart"))
+
+    draw_cmd = commands.add_parser("draw", help=t("cli.help.draw"))
+    draw_cmd.add_argument("snapshots", nargs="+", type=Path, metavar="SNAPSHOT", help=t("cli.help.snapshots"))
+    draw_cmd.add_argument("-o", "--out", type=Path, metavar="DIR", help=t("cli.help.out"))
     return parser
 
 
@@ -256,6 +302,8 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command == "run":
         run(cfg, args)
+    elif args.command == "draw":
+        draw_snapshots(cfg, args)
     else:
         report(cfg, args)
 

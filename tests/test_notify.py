@@ -207,9 +207,10 @@ def test_chart_command(tmp_path):
 def test_command_menu_lists_photos_only_when_allowed():
     cfg = Config()
     cfg.telegram.token, cfg.telegram.chat_ids = "token", [10]
-    assert [name for name, _ in notify.Notifier(cfg).bot.commands] == ["now", "stats", "sleep", "chart"]
+    base = ["now", "stats", "sleep", "nap", "naps", "chart"]
+    assert [name for name, _ in notify.Notifier(cfg).bot.commands] == base
     cfg.telegram.photos = True
-    assert [name for name, _ in notify.Notifier(cfg).bot.commands] == ["now", "stats", "sleep", "chart", "photo", "marked"]
+    assert [name for name, _ in notify.Notifier(cfg).bot.commands] == base + ["photo", "marked"]
 
 
 def test_bot_answers_about_the_last_24_hours(tmp_path):
@@ -229,3 +230,59 @@ def test_bot_answers_about_the_last_24_hours(tmp_path):
     assert "sleep 30 min, sleeps: 1" in stats
     assert notifier.sleep_text().startswith("Sleep over the last 24 hours: 30 min, sleeps: 1")
     assert notifier.chart().caption == "Data as of 22:30"
+
+
+def test_bot_sends_buttons_and_edits_the_message_on_a_press(caplog):
+    fake = FakeTelegram()
+    pressed = []
+
+    def on_button(data):
+        pressed.append(data)
+        return telegram.Reply("done", [[("Again", "x:2")]])
+
+    bot = telegram.TelegramBot(
+        "token", [10], handler=lambda text: telegram.Reply("pick", [[("A", "x:1"), ("B", "x:2")]]),
+        opener=fake, on_button=on_button,
+    )
+    bot.handle_updates([{"update_id": 1, "message": {"chat": {"id": 10}, "text": "/nap"}}])
+    method, params = fake.calls[-1]
+    assert method == "sendMessage" and params["text"] == "pick"
+    assert json.loads(params["reply_markup"]) == {
+        "inline_keyboard": [[{"text": "A", "callback_data": "x:1"}, {"text": "B", "callback_data": "x:2"}]]
+    }
+
+    press = {"id": "q1", "data": "x:1", "message": {"message_id": 7, "chat": {"id": 10}}}
+    stranger = {"id": "q2", "data": "x:1", "message": {"message_id": 8, "chat": {"id": 99}}}
+    with caplog.at_level("INFO"):
+        bot.handle_updates([{"update_id": 2, "callback_query": press}, {"update_id": 3, "callback_query": stranger}])
+    assert pressed == ["x:1"]
+    methods = [m for m, _ in fake.calls[1:]]
+    assert methods == ["answerCallbackQuery", "editMessageText", "answerCallbackQuery"]
+    edit = fake.calls[2][1]
+    assert (edit["chat_id"], edit["message_id"], edit["text"]) == ("10", "7", "done")
+    assert "99" in caplog.text
+
+
+def test_naps_count_in_sleep_and_stats(tmp_path):
+    set_language("ru")
+    try:
+        cfg = Config()
+        cfg.storage.db_path = str(tmp_path / "db.sqlite")
+        storage = Storage(cfg.storage.db_path)
+        for i in range(0, 1800, 5):  # half an hour asleep in the crib
+            storage.add(T0 + timedelta(seconds=i), HeadEstimate(Side.LEFT, 0.8), 0.0)
+        # A nap in arms in the afternoon, and one entered for the crib sleep the camera saw too.
+        storage.add_nap(T0 - timedelta(hours=8), T0 - timedelta(hours=6, minutes=30))
+        storage.add_nap(T0 + timedelta(minutes=10), T0 + timedelta(minutes=20))
+        storage.close()
+        notifier = notify.Notifier(cfg)
+        notifier.status = notify.Status(time=T0 + timedelta(minutes=30))
+        assert notifier.sleep_text().split("\n") == [
+            "Сон за последние 24 часа: 2 ч 00 мин, засыпаний: 2, самый долгий: 1 ч 30 мин",
+            "14:00-15:30  1 ч 30 мин (вне кроватки)",
+            "22:00-сейчас  30 мин",
+        ]
+        assert "сон 2 ч 00 мин, засыпаний: 2" in notifier.stats_text()
+        assert isinstance(notifier.handle_command("/nap"), telegram.Reply)
+    finally:
+        set_language("en")

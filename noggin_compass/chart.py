@@ -82,7 +82,9 @@ def _header(fig: Figure, ax, day: DaySummary, title: str, top: float) -> None:
 def _timeline(ax, day: DaySummary, sleep: list[SleepPeriod]) -> None:
     _style(ax)
     start = _hour_floor(min(s.start for s in day.segments))
-    end = _hour_floor(max(s.end for s in day.segments)) + timedelta(hours=1)
+    # A nap the parents logged can end after the last frame from the camera.
+    last = max([s.end for s in day.segments] + [p.end for p in sleep])
+    end = _hour_floor(last) + timedelta(hours=1)
 
     def x(ts: datetime) -> float:
         return (ts - start).total_seconds() / 3600

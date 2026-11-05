@@ -16,6 +16,7 @@ from .config import Config, DetectorConfig, load_config, load_dotenv
 from .head import HeadEstimate, Side, estimate_head, side_label
 from .i18n import LANGUAGES, set_language, t
 from .motion import MotionMeter
+from .naps import periods as nap_periods
 from .notify import Notifier, load_history, monitor_from_config
 from .pose import Person, PoseDetector
 from .preview import draw, fit
@@ -183,6 +184,7 @@ def report(cfg: Config, args: argparse.Namespace) -> None:
         samples = storage.samples(since, until)
         # From 12 hours earlier, so that a sleep that began before the first day is recognised.
         activity = storage.activity(since - timedelta(hours=12), until)
+        naps = nap_periods(storage, since - timedelta(hours=12), until)
     finally:
         storage.close()
     summaries = build_report(
@@ -194,7 +196,7 @@ def report(cfg: Config, args: argparse.Namespace) -> None:
     )
     print(render(summaries, day_start, timeline_days=args.timelines))
     first = summaries[0].day if summaries else day_of(since, day_start)
-    days = [d for d in sleep_days(activity, cfg.sleep, day_start) if d.day >= first]
+    days = [d for d in sleep_days(activity, cfg.sleep, day_start, naps) if d.day >= first]
     print()
     print(render_sleep(days, day_start, detail_days=args.timelines, samples=activity))
     if args.chart:

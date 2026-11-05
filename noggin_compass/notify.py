@@ -19,11 +19,13 @@ from .config import Config
 from .head import HeadEstimate, Side, side_label
 from .i18n import t
 from .report import build_report, day_bounds, day_of, fmt_duration, parse_day_start, reclassify, summarize
-from .sleep import find_sleep, no_sleep_text, period_lines, sleep_state
+from .naps import NapBook
+from .naps import periods as nap_periods
+from .sleep import find_sleep, no_sleep_text, period_lines, sleep_state, with_naps
 from .pose import Person
 from .preview import draw, fit
 from .storage import Storage
-from .telegram import Photo, TelegramBot, resolve_credentials
+from .telegram import Photo, Reply, TelegramBot, resolve_credentials
 from .tracker import Segment, build_segments
 
 log = logging.getLogger(__name__)
@@ -114,16 +116,23 @@ class Notifier:
         self.cfg = cfg
         self.status = Status()
         self.frame: Frame | None = None
+        self.naps = NapBook(cfg.storage.db_path)
         token, chat_ids = resolve_credentials(cfg.telegram.token, cfg.telegram.chat_ids)
         commands = [
             ("now", t("bot.cmd.now")),
             ("stats", t("bot.cmd.stats")),
             ("sleep", t("bot.cmd.sleep")),
+            ("nap", t("bot.cmd.nap")),
+            ("naps", t("bot.cmd.naps")),
             ("chart", t("bot.cmd.chart")),
         ]
         if cfg.telegram.photos:
             commands += [("photo", t("bot.cmd.photo")), ("marked", t("bot.cmd.marked"))]
-        self.bot = TelegramBot(token, chat_ids, self.handle_command, commands=commands) if token else None
+        self.bot = (
+            TelegramBot(token, chat_ids, self.handle_command, commands=commands, on_button=self.naps.press)
+            if token
+            else None
+        )
 
     def start(self) -> None:
         if self.bot is not None:
@@ -151,7 +160,7 @@ class Notifier:
         if self.bot is not None:
             self.bot.send(text)
 
-    def handle_command(self, text: str) -> str | Photo:
+    def handle_command(self, text: str) -> str | Photo | Reply:
         command = text.strip().split()[0].split("@")[0].lower() if text.strip() else ""
         if command == "/now":
             return self.now_text()
@@ -159,6 +168,10 @@ class Notifier:
             return self.stats_text()
         if command == "/sleep":
             return self.sleep_text()
+        if command == "/nap":
+            return self.naps.menu()
+        if command == "/naps":
+            return self.naps.list()
         if command == "/chart":
             return self.chart()
         if command in ("/photo", "/marked"):
@@ -189,6 +202,7 @@ class Notifier:
         try:
             samples = storage.samples(since, now)
             activity = storage.activity(since - SLEEP_LOOKBACK, now)
+            naps = nap_periods(storage, since, now)
         finally:
             storage.close()
         segments = build_segments(
@@ -197,7 +211,7 @@ class Notifier:
             self.cfg.tracking.gap_seconds,
         )
         summary = summarize(since.date(), segments) if segments else None
-        periods = [p for p in find_sleep(activity, self.cfg.sleep) if p.end > since]
+        periods = [p for p in with_naps(find_sleep(activity, self.cfg.sleep), naps) if p.end > since]
         return summary, periods, activity, since
 
     def chart(self) -> str | Photo:

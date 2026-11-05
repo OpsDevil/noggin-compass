@@ -218,7 +218,8 @@ stays on that side. The numbers above are an example; agree on the limits with y
 
 **Telegram.** Alerts can also go to Telegram, and the bot answers `/now` (where the head is, whether
 it is time to turn and whether the baby is asleep), and over the last 24 hours `/stats` (time per
-side), `/sleep` (sleep, see [Sleep](#sleep)) and `/chart` (a chart like `report --chart`):
+side), `/sleep` (sleep, see [Sleep](#sleep)) and `/chart` (a chart like `report --chart`). With
+`/nap` and `/naps`, parents log sleep the camera cannot see, see [Sleep](#sleep):
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and store its token in the macOS Keychain
    (the command asks for the token and does not echo it):
@@ -260,16 +261,24 @@ for the last 24 hours, `/now` whether the baby is asleep right now. The raw move
 is stored, so changed thresholds apply to old nights too.
 
 ```
-Sleep in the crib (days start at 12:00):
+Sleep (days start at 12:00):
 04.11 (Wed)  11 h 20 min, sleeps: 4, longest: 4 h 05 min
 
 Sleep on 04.11.2026:
   13:10-14:35  1 h 25 min
+  16:00-17:30  1 h 30 min (outside the crib)
   ...
 ```
 
-Lying still with open eyes also counts as sleep, and naps in arms or in a stroller are not seen.
-For a rough daily total this is enough; telling open eyes from closed would need a face model.
+**Sleep outside the crib.** The camera does not see naps in arms or in a pram, so parents log them
+in Telegram. `/nap` offers buttons with a length, from 15 minutes to 3 hours. The sleep is taken to
+have ended when the button is pressed, so press it right after the baby wakes up. `/naps` lists
+the latest entries, and each can be changed (a new length, the wake-up time stays) or deleted.
+Logged sleep counts in `/sleep`, `/stats`, `/chart` and `report`, marked "outside the crib". A nap
+that overlaps sleep the camera saw, or one logged by both parents, is counted once.
+
+Lying still with open eyes also counts as sleep. For a rough daily total this is enough; telling
+open eyes from closed would need a face model.
 
 ## Configuration
 
@@ -370,8 +379,8 @@ Nothing else has to be set up.
 
 * A face covered by a hand or a blanket is reported as "not visible" rather than guessed.
 * If an adult leans over the crib, the largest person in the crib area is analysed.
-* Sleep is told from movement only: lying still with open eyes counts as sleep, and only sleep in
-  the crib is seen.
+* Sleep is told from movement only: lying still with open eyes counts as sleep. Sleep outside the
+  crib is only counted when the parents log it in Telegram.
 
 ## Roadmap
 

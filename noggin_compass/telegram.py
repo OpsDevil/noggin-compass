@@ -13,7 +13,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from . import keychain
 from .i18n import t
@@ -39,6 +39,19 @@ class Photo:
         return "image/png" if self.filename.endswith(".png") else "image/jpeg"
 
 
+@dataclass
+class Reply:
+    """A message with buttons under it. A press on a button comes back as its data, and the
+    answer to it replaces the message, so old buttons do not linger."""
+
+    text: str
+    buttons: list[list[tuple[str, str]]] = field(default_factory=list)  # rows of (label, data)
+
+    def markup(self) -> str:
+        rows = [[{"text": label, "callback_data": data} for label, data in row] for row in self.buttons]
+        return json.dumps({"inline_keyboard": rows}, ensure_ascii=False)
+
+
 def resolve_credentials(token: str | None, chat_ids: list[int]) -> tuple[str | None, list[int]]:
     """Token lookup order: the environment variable (including .env), the config, the macOS
     Keychain. Chat ids: the environment variable, then the config."""
@@ -53,13 +66,15 @@ class TelegramBot:
         self,
         token: str,
         chat_ids: list[int],
-        handler: Callable[[str], str | Photo | None],
+        handler: Callable[[str], str | Photo | Reply | None],
         opener: Callable = urllib.request.urlopen,
         commands: list[tuple[str, str]] = (),
+        on_button: Callable[[str], str | Reply | None] | None = None,
     ):
         self.token = token
         self.chat_ids = set(chat_ids)
         self.handler = handler  # command text -> reply, or None if there is nothing to say
+        self.on_button = on_button  # button data -> what replaces the message with the button
         self.commands = list(commands)  # shown in the Telegram command menu
         self._open = opener
         self._running = False
@@ -94,18 +109,49 @@ class TelegramBot:
         except Exception as error:
             log.warning(t("tg.error", error=error))
 
-    def send(self, text: str, chat_ids: list[int] | None = None) -> None:
+    def send(self, text: str | Reply, chat_ids: list[int] | None = None) -> None:
+        reply = text if isinstance(text, Reply) else Reply(text)
+        extra = {"reply_markup": reply.markup()} if reply.buttons else {}
         for chat in chat_ids or sorted(self.chat_ids):
             try:
-                self.call("sendMessage", chat_id=chat, text=text)
+                self.call("sendMessage", chat_id=chat, text=reply.text, **extra)
             except Exception as error:  # no network etc.: the alert still sounds on the computer
                 log.warning(t("tg.error", error=error))
+
+    def _press(self, query: dict) -> None:
+        message = query.get("message") or {}
+        chat = (message.get("chat") or {}).get("id")
+        try:
+            # Stops the spinner on the button.
+            self.call("answerCallbackQuery", callback_query_id=query.get("id", ""))
+        except Exception as error:
+            log.warning(t("tg.error", error=error))
+        if chat not in self.chat_ids:
+            log.info(t("tg.unknown_chat", chat=chat))
+            return
+        reply = self.on_button(query.get("data") or "") if self.on_button else None
+        if reply is None:
+            return
+        reply = reply if isinstance(reply, Reply) else Reply(reply)
+        try:
+            self.call(
+                "editMessageText",
+                chat_id=chat,
+                message_id=message.get("message_id"),
+                text=reply.text,
+                reply_markup=reply.markup(),
+            )
+        except Exception as error:
+            log.warning(t("tg.error", error=error))
 
     def handle_updates(self, updates: list[dict]) -> int | None:
         """Answer commands from allowed chats and return the next offset."""
         offset = None
         for update in updates:
             offset = update["update_id"] + 1
+            if "callback_query" in update:
+                self._press(update["callback_query"])
+                continue
             message = update.get("message") or {}
             chat = (message.get("chat") or {}).get("id")
             text = message.get("text") or ""

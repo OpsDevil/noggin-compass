@@ -1,8 +1,8 @@
 """Sleep from presence in the crib and movement, minute by minute, the way sleep actigraphy works:
 a baby lying still for a while is asleep, a restless one is awake.
 
-It cannot tell sleep from lying still with open eyes, and it only sees the crib: naps in arms or
-in a stroller are not counted."""
+It cannot tell sleep from lying still with open eyes, and it only sees the crib. Naps in arms or
+in a pram are entered by the parents in Telegram and added with with_naps."""
 
 from __future__ import annotations
 
@@ -40,6 +40,8 @@ class SleepPeriod:
     end: datetime
     # True if the data ended while the baby was still asleep.
     ongoing: bool = False
+    # Entered by the parents, not seen by the camera.
+    manual: bool = False
 
     @property
     def seconds(self) -> float:
@@ -120,7 +122,7 @@ def split_by_day(periods: list[SleepPeriod], day_start: time) -> dict[date, list
         while start < period.end:
             day = day_of(start, day_start)
             end = min(period.end, day_bounds(day, day_start)[1])
-            days[day].append(SleepPeriod(start, end, period.ongoing and end == period.end))
+            days[day].append(SleepPeriod(start, end, period.ongoing and end == period.end, period.manual))
             start = end
     return dict(days)
 
@@ -139,25 +141,44 @@ class SleepDay:
         return max((p.seconds for p in self.periods), default=0.0)
 
 
+def with_naps(periods: list[SleepPeriod], naps: list[SleepPeriod]) -> list[SleepPeriod]:
+    """Sleep the camera found plus the naps the parents entered, in time order. Overlapping ones
+    become one sleep, so a nap entered for a sleep the camera also saw, or entered twice, is not
+    counted twice."""
+    merged: list[SleepPeriod] = []
+    for p in sorted(list(periods) + list(naps), key=lambda p: p.start):
+        last = merged[-1] if merged else None
+        if last is not None and p.start <= last.end:
+            ongoing = p.ongoing if p.end >= last.end else last.ongoing
+            merged[-1] = SleepPeriod(last.start, max(last.end, p.end), ongoing, last.manual and p.manual)
+        else:
+            merged.append(p)
+    return merged
+
+
 def sleep_days(
-    samples: list[tuple[datetime, Side, float | None]], cfg: SleepConfig, day_start: time
+    samples: list[tuple[datetime, Side, float | None]],
+    cfg: SleepConfig,
+    day_start: time,
+    naps: list[SleepPeriod] = (),
 ) -> list[SleepDay]:
-    days = split_by_day(find_sleep(samples, cfg), day_start)
+    days = split_by_day(with_naps(find_sleep(samples, cfg), naps), day_start)
     return [SleepDay(day, periods) for day, periods in sorted(days.items())]
 
 
 def period_lines(periods: list[SleepPeriod], now: datetime | None = None) -> list[str]:
     now = now or datetime.now()
-    return [
-        t(
+    lines = []
+    for p in periods:
+        line = t(
             # A sleep cut off by the end of old data is not "now".
             "sleep.ongoing" if p.ongoing and now - p.end <= 2 * MINUTE else "sleep.period",
             start=f"{p.start:%H:%M}",
             end=f"{p.end:%H:%M}",
             duration=fmt_duration(p.seconds),
         )
-        for p in periods
-    ]
+        lines.append(t("sleep.manual", line=line) if p.manual else line)
+    return lines
 
 
 def no_sleep_text(samples: list[tuple[datetime, Side, float | None]]) -> str:

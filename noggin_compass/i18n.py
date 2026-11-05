@@ -90,6 +90,8 @@ MESSAGES: dict[str, dict[str, str]] = {
             "/now - where the head is now and whether it is time to turn\n"
             "/stats - time per side over the last 24 hours\n"
             "/sleep - sleep over the last 24 hours\n"
+            "/nap - log sleep outside the crib (in arms, in a pram)\n"
+            "/naps - change or delete logged sleep\n"
             "/chart - a chart of the last 24 hours and left versus right per day\n"
             "/photo - a picture from the camera right now\n"
             "/marked - the same picture with what the program detected\n"
@@ -117,7 +119,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "not visible {unknown}\n"
             "turns: {turns}"
         ),
-        "sleep.title": "Sleep in the crib (days start at {start}):",
+        "sleep.title": "Sleep (days start at {start}):",
         "sleep.day": "{total}, sleeps: {count}, longest: {longest}",
         "sleep.day_title": "Sleep on {date}:",
         "sleep.period": "{start}-{end}  {duration}",
@@ -137,6 +139,23 @@ MESSAGES: dict[str, dict[str, str]] = {
         "chart.days": "{left} and {right} per day",
         "bot.cmd.chart": "chart, last 24 hours",
         "bot.chart_caption": "Data as of {time}",
+        "bot.cmd.nap": "log sleep outside the crib",
+        "bot.cmd.naps": "change logged sleep",
+        "sleep.manual": "{line} (outside the crib)",
+        "nap.ask": "How long did the baby sleep outside the crib? The sleep has just ended.",
+        "nap.hours": "{h} h",
+        "nap.entry": "{when}, {duration}",
+        "nap.added": "Logged sleep outside the crib: {entry}.",
+        "nap.list": "Sleep outside the crib, latest first. Tap an entry to change or delete it.",
+        "nap.list_empty": "No sleep outside the crib has been logged yet. To log it: /nap",
+        "nap.gone": "This entry no longer exists.",
+        "nap.ask_again": "Logged: {entry}. How long did the baby really sleep?",
+        "nap.changed": "Changed: {entry}.",
+        "nap.deleted": "Deleted: {entry}.",
+        "nap.btn.change": "Change",
+        "nap.btn.delete": "Delete",
+        "nap.btn.back": "Back",
+        "nap.btn.list": "Change logged sleep",
         "tg.started": "Telegram: alerts and commands for {count} chat(s)",
         "tg.unknown_chat": (
             "Telegram: ignored a message from chat {chat}. To allow it, add {chat} to "
@@ -233,6 +252,8 @@ MESSAGES: dict[str, dict[str, str]] = {
             "/now - где сейчас голова и не пора ли поворачивать\n"
             "/stats - время по сторонам за последние 24 часа\n"
             "/sleep - сон за последние 24 часа\n"
+            "/nap - записать сон вне кроватки (на руках, в коляске)\n"
+            "/naps - изменить или удалить записанный сон\n"
             "/chart - график за последние 24 часа и влево/вправо по суткам\n"
             "/photo - снимок с камеры прямо сейчас\n"
             "/marked - тот же снимок с тем, что нашла программа\n"
@@ -260,7 +281,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "не видно {unknown}\n"
             "поворотов: {turns}"
         ),
-        "sleep.title": "Сон в кроватке (сутки с {start}):",
+        "sleep.title": "Сон (сутки с {start}):",
         "sleep.day": "{total}, засыпаний: {count}, самый долгий: {longest}",
         "sleep.day_title": "Сон за {date}:",
         "sleep.period": "{start}-{end}  {duration}",
@@ -280,6 +301,23 @@ MESSAGES: dict[str, dict[str, str]] = {
         "chart.days": "{left} и {right} по суткам",
         "bot.cmd.chart": "график за 24 часа",
         "bot.chart_caption": "Данные на {time}",
+        "bot.cmd.nap": "записать сон вне кроватки",
+        "bot.cmd.naps": "изменить записанный сон",
+        "sleep.manual": "{line} (вне кроватки)",
+        "nap.ask": "Сколько малыш спал вне кроватки? Сон закончился только что.",
+        "nap.hours": "{h} ч",
+        "nap.entry": "{when}, {duration}",
+        "nap.added": "Записан сон вне кроватки: {entry}.",
+        "nap.list": "Сон вне кроватки, сначала последний. Нажмите на запись, чтобы изменить или удалить её.",
+        "nap.list_empty": "Сон вне кроватки ещё не записывали. Записать: /nap",
+        "nap.gone": "Этой записи уже нет.",
+        "nap.ask_again": "Записано: {entry}. Сколько малыш спал на самом деле?",
+        "nap.changed": "Исправлено: {entry}.",
+        "nap.deleted": "Удалено: {entry}.",
+        "nap.btn.change": "Изменить",
+        "nap.btn.delete": "Удалить",
+        "nap.btn.back": "Назад",
+        "nap.btn.list": "Изменить записанный сон",
         "tg.started": "Telegram: сигналы и команды для чатов: {count}",
         "tg.unknown_chat": (
             "Telegram: сообщение из чата {chat} пропущено. Чтобы разрешить его, добавьте {chat} в "

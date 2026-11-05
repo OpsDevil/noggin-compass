@@ -133,3 +133,31 @@ def test_no_sleep_message_depends_on_movement_data():
 
     assert "yet" in no_sleep_text(frames("mm"))
     assert "older versions" in no_sleep_text([(T0, Side.RIGHT, None)])
+
+
+def test_naps_join_the_camera_sleep_without_counting_twice():
+    from noggin_compass.sleep import SleepPeriod, with_naps
+
+    crib = [SleepPeriod(T0, minutes_after(60)), SleepPeriod(minutes_after(200), minutes_after(260), ongoing=True)]
+    naps = [
+        SleepPeriod(minutes_after(-120), minutes_after(-60), manual=True),  # in arms, before
+        SleepPeriod(minutes_after(40), minutes_after(90), manual=True),  # overlaps the crib sleep
+        SleepPeriod(minutes_after(100), minutes_after(130), manual=True),
+        SleepPeriod(minutes_after(110), minutes_after(120), manual=True),  # entered twice
+    ]
+    merged = with_naps(crib, naps)
+    assert [(p.start, p.end, p.manual, p.ongoing) for p in merged] == [
+        (minutes_after(-120), minutes_after(-60), True, False),
+        (T0, minutes_after(90), False, False),
+        (minutes_after(100), minutes_after(130), True, False),
+        (minutes_after(200), minutes_after(260), False, True),
+    ]
+
+
+def test_naps_count_in_sleep_days_and_are_marked():
+    from noggin_compass.sleep import SleepPeriod, render_sleep
+
+    nap = SleepPeriod(minutes_after(-120), minutes_after(-60), manual=True)
+    days = sleep_days(frames("s" * 30), CFG, time(12, 0), [nap])
+    assert [(d.total, len(d.periods)) for d in days] == [(90 * 60, 2)]
+    assert "19:00-20:00  1 h 00 min (outside the crib)" in render_sleep(days, time(12, 0))

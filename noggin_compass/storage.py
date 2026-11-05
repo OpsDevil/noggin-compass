@@ -15,7 +15,9 @@ COMMIT_EVERY = 10
 class Storage:
     def __init__(self, path: str | Path):
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(path)
+        # The bot writes from its own connection while the run loop holds a write transaction
+        # for up to COMMIT_EVERY frames, so it waits for the lock instead of failing.
+        self.conn = sqlite3.connect(path, timeout=30)
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS samples ("
@@ -25,6 +27,11 @@ class Storage:
         columns = {row[1] for row in self.conn.execute("PRAGMA table_info(samples)")}
         if "motion" not in columns:  # databases from before sleep tracking
             self.conn.execute("ALTER TABLE samples ADD COLUMN motion REAL")
+        # Sleep outside the crib, entered by the parents in Telegram.
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS naps ("
+            " id INTEGER PRIMARY KEY AUTOINCREMENT, start REAL NOT NULL, end REAL NOT NULL)"
+        )
         self._pending = 0
 
     def add(self, ts: datetime, estimate: HeadEstimate, motion: float | None = None) -> None:
@@ -61,6 +68,41 @@ class Storage:
         return [
             (datetime.fromtimestamp(ts), Side(side), motion)
             for ts, side, motion in self.conn.execute(query, (lo, hi))
+        ]
+
+    def add_nap(self, start: datetime, end: datetime) -> int:
+        cursor = self.conn.execute(
+            "INSERT INTO naps (start, end) VALUES (?, ?)", (start.timestamp(), end.timestamp())
+        )
+        self.conn.commit()
+        return int(cursor.lastrowid)
+
+    def update_nap(self, nap_id: int, start: datetime, end: datetime) -> None:
+        self.conn.execute(
+            "UPDATE naps SET start = ?, end = ? WHERE id = ?", (start.timestamp(), end.timestamp(), nap_id)
+        )
+        self.conn.commit()
+
+    def delete_nap(self, nap_id: int) -> None:
+        self.conn.execute("DELETE FROM naps WHERE id = ?", (nap_id,))
+        self.conn.commit()
+
+    def nap(self, nap_id: int) -> tuple[int, datetime, datetime] | None:
+        row = self.conn.execute("SELECT id, start, end FROM naps WHERE id = ?", (nap_id,)).fetchone()
+        return None if row is None else (row[0], datetime.fromtimestamp(row[1]), datetime.fromtimestamp(row[2]))
+
+    def naps(
+        self, since: datetime | None = None, until: datetime | None = None, limit: int | None = None
+    ) -> list[tuple[int, datetime, datetime]]:
+        """(id, start, end) of the naps that overlap the period, latest first."""
+        query = "SELECT id, start, end FROM naps WHERE end > ? AND start < ? ORDER BY end DESC"
+        lo = since.timestamp() if since else 0.0
+        hi = until.timestamp() if until else float("inf")
+        if limit is not None:
+            query += f" LIMIT {int(limit)}"
+        return [
+            (nap_id, datetime.fromtimestamp(start), datetime.fromtimestamp(end))
+            for nap_id, start, end in self.conn.execute(query, (lo, hi))
         ]
 
     def close(self) -> None:

@@ -19,6 +19,9 @@ MESSAGES: dict[str, dict[str, str]] = {
         "sym.right": "R",
         # How the estimate was computed
         "method.no_person": "nobody in the frame",
+        "method.crib_empty": "the crib is empty",
+        "presence.downloading": "Downloading the presence model {model} (about 1.5 GB) into {path}, once",
+        "method.baby_unseen": "in the crib, but the points are not found",
         "method.face_hidden": "face not visible",
         "method.ears_hidden": "ears not visible",
         "method.both_ears": "both ears",
@@ -192,6 +195,9 @@ MESSAGES: dict[str, dict[str, str]] = {
         "sym.left": "Л",
         "sym.right": "П",
         "method.no_person": "человека нет в кадре",
+        "method.crib_empty": "кроватка пустая",
+        "presence.downloading": "Скачиваю модель присутствия {model} (около 1.5 ГБ) в {path}, один раз",
+        "method.baby_unseen": "в кроватке, но точки не найдены",
         "method.face_hidden": "лицо не видно",
         "method.ears_hidden": "уши не видны",
         "method.both_ears": "оба уха",
@@ -366,6 +372,6 @@ def get_language() -> str:
     return _language
 
 
-def t(key: str, **kwargs) -> str:
+def t(key: str, /, **kwargs) -> str:
     text = MESSAGES[_language].get(key) or MESSAGES["en"][key]
     return text.format(**kwargs) if kwargs else text

@@ -13,7 +13,8 @@ STILL, MOVING = 0.0, 0.2
 
 def frames(pattern: str, start: datetime = T0) -> list[tuple[datetime, Side, float | None]]:
     """One character per minute, one frame per second: s still, m restless (every frame moves),
-    t a still minute with a few twitches, o not in the crib, _ no data."""
+    t a still minute with a few twitches, o not in the crib, u in the crib but unseen (no box, so no
+    movement value), _ no data."""
     samples = []
     for i, kind in enumerate(pattern):
         minute = start + timedelta(minutes=i)
@@ -27,6 +28,8 @@ def frames(pattern: str, start: datetime = T0) -> list[tuple[datetime, Side, flo
                 samples.append((ts, Side.RIGHT, MOVING if sec < 3 else STILL))
             elif kind == "o":
                 samples.append((ts, Side.ABSENT, None))
+            elif kind == "u":
+                samples.append((ts, Side.UNKNOWN, None))
     return samples
 
 
@@ -183,3 +186,13 @@ def test_naps_count_in_sleep_days_and_are_marked():
     days = sleep_days(frames("s" * 30), CFG, time(12, 0), [nap])
     assert [(d.total, len(d.periods)) for d in days] == [(90 * 60, 2)]
     assert "19:00-20:00  1 h 00 min (outside the crib)" in render_sleep(days, time(12, 0))
+
+
+def test_state_unknown_while_the_baby_in_the_crib_is_unseen():
+    # Asleep, then the pose model loses the baby (a white sleep sack at night) while the presence
+    # check still sees it: no movement data, so the bot must not say the baby is awake.
+    samples = frames("s" * 15 + "u" * 4)
+    assert sleep_state(samples, CFG, samples[-1][0]) == (None, None)
+    samples = frames("s" * 15 + "u" * 1)
+    asleep, _ = sleep_state(samples, CFG, samples[-1][0])
+    assert asleep

@@ -18,7 +18,7 @@ def test_snapshot_saves_the_frame_and_analysis(tmp_path):
     ts = datetime(2026, 11, 4, 21, 30, 5)
     estimate = HeadEstimate(Side.LEFT, 0.8123, method="both_ears", axis_source="shoulders")
 
-    save_snapshot(frame, ts, estimate, person, str(tmp_path), DetectorConfig())
+    save_snapshot(frame, ts, estimate, person, str(tmp_path), DetectorConfig(), presence=0.8761)
     save_snapshot(frame, ts.replace(second=15), HeadEstimate(Side.ABSENT, method="no_person"),
                   None, str(tmp_path), DetectorConfig())
 
@@ -31,6 +31,7 @@ def test_snapshot_saves_the_frame_and_analysis(tmp_path):
     assert first["file"] == "213005_left_+0.81.jpg"
     assert first["side"] == "left" and first["score"] == 0.812
     assert first["method"] == "both_ears/shoulders"
+    assert first["presence"] == 0.876
     assert len(first["keypoints"]) == 17 and first["keypoints"][1] == [2.0, 3.0, 0.5]
     assert second["side"] == "absent" and second["keypoints"] is None and second["score"] is None
 

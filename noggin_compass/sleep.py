@@ -231,9 +231,11 @@ def render_sleep(
 def sleep_state(
     samples: list[tuple[datetime, Side, float | None]], cfg: SleepConfig, now: datetime
 ) -> tuple[bool | None, SleepPeriod | None]:
-    """(asleep, current sleep) at `now`; (None, None) when there is no recent movement data."""
-    recent = now - RECENT
-    if not any(m is not None for ts, _, m in samples if ts >= recent):
+    """(asleep, current sleep) at `now`; (None, None) when there is no recent movement data.
+    Recent means a minute that could be classified: a baby in the crib whom the pose model lost
+    gives a few movement values a minute at best, which says nothing about sleep."""
+    known = [m for m, kind in classify_minutes(samples, cfg).items() if kind != Minute.MISSING]
+    if not known or now - (max(known) + MINUTE) > 2 * MINUTE:
         return None, None
     periods = find_sleep(samples, cfg)
     if periods and periods[-1].ongoing and now - periods[-1].end <= 2 * MINUTE:

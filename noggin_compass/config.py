@@ -38,19 +38,26 @@ class DetectorConfig:
     upright: bool = True
     min_person_conf: float = 0.35
     # A person smaller than this share of the frame (after camera.roi) is ignored. With the frame
-    # cropped to the crib, a baby takes 10% or more, while the "people" the network finds in an
-    # empty crib (toys, the rail, the sheet print) take 1-6%.
+    # cropped to the crib, a baby takes 10% or more, while the "people" the network finds in a
+    # crib (toys, the rail, the sheet print) take 1-6%.
     min_person_area: float = 0.06
-    # A "person" whose face points (nose, eyes, ears) span less than this share of the frame
-    # width (after camera.roi) is not the baby. The baby's face spans 4-7% of a frame cropped to
-    # the crib, the faces the network finds in the sheet print 1% or less. 0 turns off this check
-    # and faceless_seconds.
-    min_face_size: float = 0.015
-    # A find without a face (or one only the rough first pass saw) counts for this many seconds
-    # after the baby's face was last seen. A baby asleep in profile hides its face on many frames;
-    # clothes laid out in the crib have no face at all.
-    faceless_seconds: float = 30
     min_keypoint_conf: float = 0.4
+
+
+@dataclass
+class PresenceConfig:
+    # A second network that looks at the whole frame and says whether the baby is in the crib at
+    # all, so that prints on the sheet, toys and clothes laid out are not taken for the baby. Its
+    # weights (about 1.5 GB) are downloaded into models/ on the first run.
+    enabled: bool = True
+    # A fixed-resolution SigLIP or SigLIP 2 model from Hugging Face (not a NaFlex one).
+    model: str = "google/siglip2-base-patch16-224"
+    # The baby counts as in the crib when the network is at least this sure (0..1). On our camera
+    # a baby scored 0.6-1.0 and an empty crib 0-0.13, whatever lay in it. Each snapshot keeps its
+    # score in analysis.jsonl ("presence").
+    threshold: float = 0.35
+    # How often to look. In between the last answer holds.
+    every_seconds: float = 5
 
 
 @dataclass
@@ -144,6 +151,7 @@ class Config:
     language: str = "en"
     camera: CameraConfig = field(default_factory=CameraConfig)
     detector: DetectorConfig = field(default_factory=DetectorConfig)
+    presence: PresenceConfig = field(default_factory=PresenceConfig)
     head: HeadConfig = field(default_factory=HeadConfig)
     tracking: TrackingConfig = field(default_factory=TrackingConfig)
     alerts: AlertsConfig = field(default_factory=AlertsConfig)

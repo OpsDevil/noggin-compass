@@ -5,7 +5,7 @@ from noggin_compass.head import Side
 from noggin_compass.tracker import Segment
 
 T0 = datetime(2026, 11, 4, 21, 0)
-L, R, C, A = Side.LEFT, Side.RIGHT, Side.CENTER, Side.ABSENT
+L, R, C, A, U = Side.LEFT, Side.RIGHT, Side.CENTER, Side.ABSENT, Side.UNKNOWN
 H = timedelta(hours=1)
 M = timedelta(minutes=1)
 
@@ -64,6 +64,12 @@ def test_center_does_not_count_and_does_not_reset():
 def test_new_sleep_after_long_absence_resets_the_stint():
     assert run(monitor(max_imbalance=timedelta(0)), (R, 2 * H), (A, 40 * M), (R, 2 * H)) == []
     assert run(monitor(max_imbalance=timedelta(0)), (R, 2 * H), (A, 10 * M), (R, 2 * H)) != []
+
+
+def test_long_unseen_stretch_resets_the_stint_like_an_absence():
+    # In the crib but unseen for 40 min: the head may have lain on the other side meanwhile.
+    assert run(monitor(max_imbalance=timedelta(0)), (R, 2 * H), (U, 40 * M), (R, 2 * H)) == []
+    assert run(monitor(max_imbalance=timedelta(0)), (R, 2 * H), (U, 10 * M), (R, 2 * H)) != []
 
 
 def test_imbalance_counts_only_the_window():

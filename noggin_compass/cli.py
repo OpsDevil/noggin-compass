@@ -7,6 +7,7 @@ import json
 import logging
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
@@ -26,6 +27,9 @@ from .source import open_source, preprocess
 from .storage import Storage
 from .tracker import SideTracker
 
+if TYPE_CHECKING:
+    from .presence import PresenceCheck
+
 log = logging.getLogger("noggin_compass")
 
 STATUS_EVERY_SECONDS = 60
@@ -33,13 +37,24 @@ PREVIEW_WINDOW = "noggin-compass"
 
 
 def analyze(
-    detector: PoseDetector, frame: np.ndarray, cfg: Config, now: float | None = None
+    detector: PoseDetector,
+    frame: np.ndarray,
+    cfg: Config,
+    now: float | None = None,
+    presence: PresenceCheck | None = None,
 ) -> tuple[HeadEstimate, Person | None]:
+    """With `presence`, whether the baby is in the crib is decided by it, and the pose model only
+    tells where the head is turned. Without it, the pose model decides both."""
+    if presence is not None and not presence.check(frame, now):
+        return HeadEstimate(Side.ABSENT, method="crib_empty"), None
     if cfg.detector.upright:
         person = detector.detect_upright(frame, cfg.detector.min_keypoint_conf, now)
     else:
-        person = detector.detect_single(frame, cfg.detector.min_keypoint_conf, now)
+        person = detector.detect(frame)
     if person is None:
+        if presence is not None:
+            # In the crib, but the pose model lost it: a white sleep sack at night, a blanket.
+            return HeadEstimate(Side.UNKNOWN, method="baby_unseen"), None
         return HeadEstimate(Side.ABSENT, method="no_person"), None
     estimate = estimate_head(
         person.xy,
@@ -61,6 +76,7 @@ def save_snapshot(
     root: str,
     detector: DetectorConfig,
     motion: float | None = None,
+    presence: float | None = None,
 ) -> None:
     """Save the clean frame (to review it or fine-tune the model later) and a line in
     analysis.jsonl with everything that was detected. The jsonl is enough to recompute stats and
@@ -80,6 +96,8 @@ def save_snapshot(
         # Direction from the shoulders to the top of the head, for drawing the snapshot later.
         "axis": None if estimate.axis is None else [round(float(v), 3) for v in estimate.axis],
         "motion": None if motion is None else round(motion, 4),
+        # How sure the presence check was that the baby is in the crib, to tune presence.threshold.
+        "presence": None if presence is None else round(presence, 3),
         "model": detector.model,
         "imgsz": detector.imgsz,
         "upright": detector.upright,
@@ -107,9 +125,15 @@ def run(cfg: Config, args: argparse.Namespace) -> None:
         cfg.detector.min_person_conf,
         cfg.detector.imgsz,
         cfg.detector.min_person_area,
-        cfg.detector.min_face_size,
-        cfg.detector.faceless_seconds,
     )
+    presence = None
+    if cfg.presence.enabled:
+        # Imported here: it loads transformers, which takes a few seconds.
+        from .presence import PresenceCheck
+
+        presence = PresenceCheck(
+            cfg.presence.model, cfg.detector.device, cfg.presence.threshold, cfg.presence.every_seconds
+        )
     storage = Storage(cfg.storage.db_path)
     tracker = SideTracker(cfg.tracking.confirm_seconds, cfg.tracking.gap_seconds)
     motion_meter = MotionMeter()
@@ -127,7 +151,7 @@ def run(cfg: Config, args: argparse.Namespace) -> None:
                 monitor.add(load_history(storage, cfg, until=ts))
                 history_loaded = True
             frame = preprocess(frame, cfg.camera.rotate, cfg.camera.roi)
-            estimate, person = analyze(detector, frame, cfg, ts.timestamp())
+            estimate, person = analyze(detector, frame, cfg, ts.timestamp(), presence)
             motion = motion_meter.update(frame, None if person is None else person.box, ts.timestamp())
             storage.add(ts, estimate, motion)
             monitor.add(tracker.update(ts, estimate.side))
@@ -153,7 +177,8 @@ def run(cfg: Config, args: argparse.Namespace) -> None:
             )
             if snapshot_due:
                 last_snapshot = now
-                save_snapshot(frame, ts, estimate, person, cfg.storage.snapshots_dir, cfg.detector, motion)
+                save_snapshot(frame, ts, estimate, person, cfg.storage.snapshots_dir, cfg.detector, motion,
+                              presence.last_score if presence else None)
             if args.preview:
                 debug = draw(frame, person, estimate, cfg.detector.min_keypoint_conf, cfg.head.mirrored)
                 cv2.imshow(PREVIEW_WINDOW, fit(debug))

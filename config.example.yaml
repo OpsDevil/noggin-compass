@@ -28,9 +28,16 @@ detector:
   upright: true             # second pass on a crop with the baby turned head-up
   min_person_conf: 0.35     # how sure the network must be that it sees a person
   min_person_area: 0.06     # a "person" smaller than this share of the frame is ignored
-  min_face_size: 0.015      # a "person" whose face spans less of the frame width is not the baby
-  faceless_seconds: 30      # a "person" without a face counts this long after the face was seen
   min_keypoint_conf: 0.4    # keypoints below this confidence are ignored
+
+presence:
+  # A second network looks at the whole frame and says whether the baby is in the crib at all, so
+  # that prints on the sheet, toys and clothes laid out are not taken for the baby. About 1.5 GB,
+  # downloaded into models/ on the first run.
+  enabled: true
+  model: google/siglip2-base-patch16-224
+  threshold: 0.35           # 0..1; the baby counts as in the crib from this score up
+  every_seconds: 5          # how often to look; in between the last answer holds
 
 head:
   center_threshold: 0.35    # how far the head must turn to count as left/right; 0.35 ~ 20 degrees

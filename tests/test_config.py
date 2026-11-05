@@ -1,6 +1,7 @@
 import dataclasses
 from pathlib import Path
 
+import pytest
 import yaml
 
 from noggin_compass.config import Config, load_config
@@ -29,3 +30,10 @@ def test_example_config_documents_every_option_with_its_default():
     data = yaml.safe_load(EXAMPLE.read_text(encoding="utf-8"))
     assert set(_yaml_keys(data)) == set(_keys(Config()))
     assert load_config(EXAMPLE) == Config()
+
+
+def test_unknown_option_names_itself(tmp_path):
+    config = tmp_path / "config.yaml"
+    config.write_text("detector:\n  min_face_size: 0.015\n")
+    with pytest.raises(ValueError, match="detector.min_face_size"):
+        load_config(config)

@@ -10,7 +10,7 @@ from .head import Side
 from .tracker import Segment
 
 TURN_SIDES = (Side.LEFT, Side.RIGHT)
-# Out of the crib (or no data) for this long means a new sleep, and the stint starts over.
+# Out of the crib, unseen or no data for this long means a new sleep, and the stint starts over.
 NEW_SLEEP_AFTER = timedelta(minutes=30)
 
 
@@ -30,9 +30,9 @@ class Alert:
 class BalanceMonitor:
     """Two rules, each disabled by a zero value:
 
-    * a stint on one side lasts longer than max_same_side. Center and unknown do not break the
-      stint, and neither does a turn to the other side shorter than min_turn: that is not long
-      enough to take the pressure off the back of the head;
+    * a stint on one side lasts longer than max_same_side. Center and a short unknown stretch do
+      not break the stint, and neither does a turn to the other side shorter than min_turn: that
+      is not long enough to take the pressure off the back of the head;
     * within the last `window`, one side has collected max_imbalance more time than the other,
       and the head is on that side again now.
 
@@ -89,7 +89,8 @@ class BalanceMonitor:
             length = seg.end - seg.start
             if seg.side == other(side) and length >= self.min_turn:
                 break
-            if seg.side == Side.ABSENT and length >= NEW_SLEEP_AFTER:
+            # Long out of the crib, or in it but unseen: where the head lay then is not known.
+            if seg.side in (Side.ABSENT, Side.UNKNOWN) and length >= NEW_SLEEP_AFTER:
                 break
             if seg.side == side:
                 total += length.total_seconds()

@@ -73,20 +73,16 @@ flowchart TD
   disappeared. When the fresh find and the remembered one do not touch, for example a rolled
   bumper next to the head was found instead of the baby, the larger one wins: in a crib that is
   the baby.
-* **Empty crib.** To find a baby in a sleep sack, the person threshold has to be low, and then an
-  empty crib yields "people" too: in the sheet print, in toys, in clothes laid out in the crib.
-  On our camera that gave about an hour a day of made-up "not visible" and head turns, and even
-  made-up sleep. Three checks rule them out, see [Configuration](#configuration):
-  * a "person" smaller than `detector.min_person_area` of the frame is ignored: a baby takes 10%
-    or more of a frame cropped to the crib, the false ones 1-6%;
-  * the face must not be tiny: the faces the network finds in a print are specks, several times
-    smaller than a baby's face (`detector.min_face_size`);
-  * a find without a face counts only for `detector.faceless_seconds` after the baby's face was
-    seen. A baby asleep in profile hides its face on many frames, while clothes have no face at
-    all. The same goes for a find that only the rough first pass made.
-
-  On a day and a half of snapshots this left 67 of the 362 false finds in an empty crib and no
-  made-up sleep, while the baby's real sleep came out the same.
+* **Is the baby in the crib at all?** To find a baby in a sleep sack, the pose model's person
+  threshold has to be low, and then it also finds "people" in an empty crib: in the sheet print, in
+  a toy with a face, in clothes laid out, in an empty sleep sack. So a second network answers this
+  question: [SigLIP 2](https://huggingface.co/google/siglip2-base-patch16-224) compares the whole
+  picture with short descriptions such as "a baby in a crib" and "an empty crib" and needs no
+  training. The pose model then only says where the head is turned, and when it loses a baby who
+  is in the crib (a white sleep sack at night), the frame is "not visible" rather than "not in
+  frame". On a day and a half of snapshots this cut the minutes of an empty crib that looked
+  occupied from 64 to 6 and the minutes the baby went missing from 29 to 8, with no made-up sleep.
+  See `presence` in [Configuration](#configuration).
 * **Geometry, not magic.** Think of the head as a ball. When it turns, the face moves sideways
   while the ears move towards the middle, so the face position between the ears tells the angle.
   The score is 0 for straight, about 0.35 at 20 degrees and 1 for a full profile; positive means
@@ -105,8 +101,8 @@ Everything runs on your own computer:
   checking accuracy, off by default);
 * the camera password stays in an environment variable, your local config or the macOS
   Keychain and never shows up in logs;
-* after the model weights are downloaded once, Ultralytics runs in offline mode and its
-  telemetry is switched off;
+* after the model weights are downloaded once, both models are loaded from `models/` without
+  going online, and the Ultralytics and Hugging Face telemetry is switched off;
 * nothing stops you from blocking the camera's internet access in your router, RTSP keeps
   working locally;
 * Telegram is optional: if you turn it on, alert texts and statistics go through Telegram.
@@ -128,8 +124,9 @@ You need Python 3.11+ and [uv](https://docs.astral.sh/uv/). Developed and tested
 uv sync
 ```
 
-That is all the installation. The pose model (about 20 MB) is downloaded automatically into
-`models/` on the first run; after that the program works without internet. It runs on the CPU by
+That is all the installation. The pose model (about 20 MB) and the presence model (about 1.5 GB)
+are downloaded automatically into `models/` on the first run; after that the program works without
+internet. It runs on the CPU by
 default, see [CPU or GPU](#cpu-or-gpu) for the Apple or NVIDIA GPU.
 
 The interface is in English; for Russian add `--lang ru` to any command or put `language: ru`
@@ -181,6 +178,7 @@ uv run noggin-compass report
 ```bash
 uv run noggin-compass [--config FILE] [--lang en|ru] run [options]
 uv run noggin-compass [--config FILE] [--lang en|ru] report [options]
+uv run noggin-compass [--config FILE] [--lang en|ru] draw SNAPSHOT... [-o DIR]
 ```
 
 | Option | What it does |
@@ -198,10 +196,12 @@ uv run noggin-compass [--config FILE] [--lang en|ru] report [options]
 | `--date DATE` | Show one particular day, e.g. `2026-11-04`. |
 | `--timelines N` | For how many of the last days to print details and the timeline. Default: 1. |
 | `--chart FILE` | Also save a chart of the last day as a PNG: time per side, a timeline of the head and sleep, left versus right per day. |
+| **`draw`** | Draw what was detected on saved snapshots (see `storage.snapshot_every_seconds`), as in the preview window. |
+| `-o`, `--out DIR` | Where to put the drawn copies. Default: next to each snapshot, as `<name>_drawn.jpg`. |
 
 A report day runs from noon to noon, so a whole night lands in one day. In the timeline every row
-is an hour and every character a minute: `L` left, `R` right, `·` straight, `?` face not visible,
-`_` nobody in the crib. The raw score of every frame is stored, so after changing the threshold
+is an hour and every character a minute: `L` left, `R` right, `·` straight, `?` in the crib but the face is not
+visible, `_` nobody in the crib. The raw score of every frame is stored, so after changing the threshold
 or the smoothing the report re-computes old nights too.
 
 ## Turn alerts and Telegram
@@ -310,11 +310,13 @@ All options with their defaults are in [`config.example.yaml`](config.example.ya
 | `detector.device` | `cpu` | Where it runs: `cpu`, `mps` (Apple Silicon GPU) or `0` (first NVIDIA GPU), see [CPU or GPU](#cpu-or-gpu). |
 | `detector.imgsz` | `640` | How detailed a picture the network gets. In an overhead view the head is small, and 1280 finds the face points much more reliably, at the cost of speed. |
 | `detector.upright` | `true` | The second pass on a crop with the baby turned head-up. Switch it off only to save CPU. |
-| `detector.min_person_conf` | `0.35` | How sure the network must be that it sees a person at all. Lower it if the baby under a blanket is often "not in frame". |
-| `detector.min_person_area` | `0.06` | A "person" smaller than this share of the frame is ignored. With the frame cropped to the crib (`camera.roi`), a baby takes 10% of it or more, while the toys, the rail and the sheet print that the network took for people in an empty crib took 1-6% on our camera. Lower it if the baby is small in the frame (a camera mounted high, no `camera.roi`) and the program says "not in frame" while the baby is there. Raise it if the preview still finds people in an empty crib. The real sizes on your camera are in the `box` field of `analysis.jsonl` next to the snapshots, in pixels of the cropped frame. |
-| `detector.min_face_size` | `0.015` | A "person" whose face points (nose, eyes, ears) span less than this share of the frame width is not the baby. On our camera the baby's face spans 4-7% of the frame width, the faces the network found in the sheet print 1% or less. Lower it if the baby is small in the frame and often "not in frame", raise it if the preview still draws faces on an empty crib. `0` turns off this check and `faceless_seconds`. |
-| `detector.faceless_seconds` | `30` | A "person" without a face counts as the baby for this many seconds after the baby's face was last seen, then it is "not in frame". A baby asleep with the face turned away hides it for a few seconds at a time, clothes laid out in the crib have no face at all. A baby on its tummy shows no face either, so tummy time soon counts as out of the crib. Raise it if the sleep of a baby who turns away breaks into pieces, lower it if clothes or toys in the crib still show up as "not visible". |
+| `detector.min_person_conf` | `0.35` | How sure the pose network must be that it sees a person at all. Lower it if the baby under a blanket is often "not visible". |
+| `detector.min_person_area` | `0.06` | A "person" smaller than this share of the frame is ignored. With the frame cropped to the crib (`camera.roi`), a baby takes 10% of it or more, while the toys, the rail and the sheet print that the network took for people in an empty crib took 1-6% on our camera. Lower it if the baby is small in the frame (a camera mounted high, no `camera.roi`) and often comes out "not visible" while in the crib. With `presence.enabled: false`, raise it if the preview still finds people in an empty crib; with the presence check on, an empty crib that comes out occupied is a matter of `presence.threshold`. The real sizes on your camera are in the `box` field of `analysis.jsonl` next to the snapshots, in pixels of the cropped frame. |
 | `detector.min_keypoint_conf` | `0.4` | Keypoints with lower confidence are ignored. Raising it makes the program more cautious: more "not visible", fewer mistakes. |
+| `presence.enabled` | `true` | A second network decides whether the baby is in the crib at all (see How it works). Without it the pose model decides, and an empty crib with a patterned sheet, toys or clothes can show up as "not visible", head turns or even sleep. |
+| `presence.model` | `google/siglip2-base-patch16-224` | A fixed-resolution SigLIP or SigLIP 2 model from Hugging Face (the NaFlex ones do not work). The default is about 1.5 GB and takes 40-60 ms per check on an Apple M4 Pro CPU. |
+| `presence.threshold` | `0.35` | How sure the network must be (0..1) that the baby is in the crib. On our camera a baby scored 0.6-1.0 and an empty crib 0-0.13, whatever lay in it, so the exact value matters little. Lower it if a baby under a blanket comes out "not in frame", raise it if an empty crib comes out occupied. The score of each snapshot is in the `presence` field of `analysis.jsonl`. Unlike the head thresholds, a new value only applies from then on. |
+| `presence.every_seconds` | `5` | How often to check. In between the last answer holds, so putting the baby in or taking it out shows up within this many seconds. |
 | **head** | | |
 | `head.center_threshold` | `0.35` | How far the head has to turn before it counts as left or right instead of straight. 0.35 is about 20 degrees. Raise it if slight turns are counted as left or right, lower it to catch them. |
 | `head.mirrored` | `false` | Set to `true` if the camera shows a mirrored picture, otherwise left and right get swapped. |
@@ -342,7 +344,7 @@ All options with their defaults are in [`config.example.yaml`](config.example.ya
 | `sleep.fall_asleep_window_minutes` | `10` | ...within this many minutes; the sleep starts at the first still one. Set both to the same number to require still minutes in a row. |
 | `sleep.wake_minutes` | `7` | Awake after this many restless minutes... |
 | `sleep.wake_window_minutes` | `10` | ...within this many minutes. |
-| `sleep.out_minutes` | `1` | The baby counts as taken out of the crib only after this many minutes in a row without being seen. In daylight the network sometimes loses a still baby in a white sleep sack for a minute or two, and the sleep ends. 2-3 keeps such a sleep, but if the network finds "people" in an empty crib (a patterned sheet, an empty sleep sack), it can count sleep that never happened. Check the snapshots of an empty crib before raising it. |
+| `sleep.out_minutes` | `1` | The baby counts as taken out of the crib only after this many minutes in a row of "not in frame". With the presence check on, a baby the pose network loses stays "not visible" and the sleep goes on, so there is no reason to change it. With `presence.enabled: false` the network sometimes loses a still baby in a white sleep sack for a minute or two in daylight, and the sleep ends; 2-3 keeps such a sleep, but if the network finds "people" in an empty crib (a patterned sheet, an empty sleep sack), it can count sleep that never happened. |
 | **storage** | | |
 | `storage.db_path` | `data/noggin-compass.db` | SQLite file with the per-second results. |
 | `storage.snapshots_dir` | `data/snapshots` | Where snapshots are saved. |
@@ -396,6 +398,8 @@ Nothing else has to be set up.
 * If an adult leans over the crib, the largest person in the crib area is analysed.
 * Sleep is told from movement only: lying still with open eyes counts as sleep. Sleep outside the
   crib is only counted when the parents log it in Telegram.
+* The presence check has been tried on a day and a half of one crib and one camera, not yet with a
+  baby under infrared light.
 
 ## Roadmap
 
@@ -423,3 +427,6 @@ terms. You may use, change and share it. If you pass it on, or let other people 
 version over a network, you have to offer them the source code under AGPL-3.0 as well. The
 library is installed and the model is downloaded on your machine; neither is part of this
 repository. See also the [Ultralytics licensing terms](https://www.ultralytics.com/license).
+
+The presence check uses Google's SigLIP 2 model and Hugging Face Transformers, both under
+Apache-2.0.

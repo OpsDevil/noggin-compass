@@ -103,14 +103,21 @@ class SleepConfig:
     # twitches, and a parent's hand or a light from the door adds more: on the first recorded
     # night sleeping minutes reached 0.3.
     restless_share: float = 0.3
-    # Asleep after this many still minutes in a row; the sleep starts at the first of them.
-    fall_asleep_minutes: int = 10
+    # Asleep after fall_asleep_minutes still minutes within fall_asleep_window_minutes; the sleep
+    # starts at the first of them. Falling asleep in the day, a baby waves its arms with eyes
+    # closed, so on 2026-11-05 a 30-minute nap never had 10 still minutes in a row.
+    fall_asleep_minutes: int = 8
+    fall_asleep_window_minutes: int = 10
     # Awake after wake_minutes restless minutes within wake_window_minutes. In light morning
     # sleep, with eyes closed, a newborn turns its head every 1-3 minutes and parents fix the
     # blanket, giving 3-4 restless minutes in a row; a baby that is really awake stays restless
     # far longer.
     wake_minutes: int = 7
     wake_window_minutes: int = 10
+    # Out of the crib only after this many minutes in a row without the baby. In daylight the
+    # network loses a still baby in a white sleep sack for a minute or two, while a baby taken out
+    # stays out far longer (4 to 40 minutes on the first day).
+    out_minutes: int = 3
 
 
 @dataclass

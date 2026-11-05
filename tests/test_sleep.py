@@ -53,7 +53,22 @@ def test_falls_asleep_after_still_minutes_and_dates_it_back():
 
 
 def test_short_calm_is_not_sleep():
-    assert find_sleep(frames("mm" + "s" * 9 + "mm"), CFG) == []
+    assert find_sleep(frames("mm" + "s" * 7 + "mm"), CFG) == []
+
+
+def test_waving_arms_while_falling_asleep():
+    # Eyes closed, but the arms keep moving for a minute now and then: never 8 still in a row.
+    (period,) = find_sleep(frames("mmm" + "ssssmsssm" + "s" * 20), CFG)
+    assert period.start == minutes_after(3)
+
+
+def test_baby_lost_by_the_network_for_a_minute_or_two_sleeps_on():
+    # In daylight a still baby in a white sleep sack is not found for a minute or two.
+    (period,) = find_sleep(frames("s" * 12 + "o" + "ss" + "oo" + "s" * 10), CFG)
+    assert (period.start, period.end) == (T0, minutes_after(27))
+    # Three minutes or more is being taken out of the crib.
+    periods = find_sleep(frames("s" * 12 + "ooo" + "s" * 10), CFG)
+    assert [(p.start, p.end) for p in periods] == [(T0, minutes_after(12)), (minutes_after(15), minutes_after(25))]
 
 
 def test_twitches_and_single_restless_minutes_do_not_wake():

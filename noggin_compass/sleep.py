@@ -68,15 +68,37 @@ def classify_minutes(
     return minutes
 
 
+def _short_absences_still(minutes: dict[datetime, Minute], out_minutes: int) -> dict[datetime, Minute]:
+    """Out-of-crib minutes in a run shorter than out_minutes, with the baby seen again after it,
+    become still. In daylight the network loses a still baby in a sleep sack for a minute or two,
+    while a baby taken out stays out much longer."""
+    order = [m for m in sorted(minutes) if minutes[m] != Minute.MISSING]
+    result = dict(minutes)
+    i = 0
+    while i < len(order):
+        if minutes[order[i]] != Minute.OUT:
+            i += 1
+            continue
+        j = i
+        while j + 1 < len(order) and minutes[order[j + 1]] == Minute.OUT:
+            j += 1
+        seen_again = j + 1 < len(order)
+        if seen_again and order[j] - order[i] < (out_minutes - 1) * MINUTE:
+            for m in order[i : j + 1]:
+                result[m] = Minute.STILL
+        i = j + 1
+    return result
+
+
 def find_sleep(samples: list[tuple[datetime, Side, float | None]], cfg: SleepConfig) -> list[SleepPeriod]:
-    """Asleep after fall_asleep_minutes still minutes in a row, dated to the first of them.
-    Awake after wake_minutes restless minutes within wake_window_minutes, dated to the first
-    restless one, or as soon as the baby leaves the crib. Single twitches during sleep do not
-    wake it."""
-    minutes = classify_minutes(samples, cfg)
+    """Asleep after fall_asleep_minutes still minutes within fall_asleep_window_minutes, dated to
+    the first of them. Awake after wake_minutes restless minutes within wake_window_minutes, dated
+    to the first restless one, or when the baby has been out of the crib for out_minutes. Twitches,
+    head turns and waving arms during sleep do not wake it."""
+    minutes = _short_absences_still(classify_minutes(samples, cfg), cfg.out_minutes)
     periods: list[SleepPeriod] = []
     asleep: datetime | None = None
-    still_since: datetime | None = None
+    recent: deque[tuple[datetime, bool]] = deque()  # (minute, still) within the fall-asleep window
     restless: deque[datetime] = deque()
     last: datetime | None = None  # last minute with data
 
@@ -93,23 +115,24 @@ def find_sleep(samples: list[tuple[datetime, Side, float | None]], cfg: SleepCon
             continue
         if last is not None and minute - last > MAX_GAP:
             wake(last + MINUTE)
-            still_since = None
+            recent.clear()
         last = minute
         if kind == Minute.OUT:
             wake(minute)
-            still_since = None
-        elif kind == Minute.STILL:
-            still_since = still_since or minute
-            if asleep is None and minute - still_since >= (cfg.fall_asleep_minutes - 1) * MINUTE:
-                asleep = still_since
-        else:
-            still_since = None
-            if asleep is not None:
-                restless.append(minute)
-                while restless[0] <= minute - cfg.wake_window_minutes * MINUTE:
-                    restless.popleft()
-                if len(restless) >= cfg.wake_minutes:
-                    wake(restless[0])
+            recent.clear()
+            continue
+        recent.append((minute, kind == Minute.STILL))
+        while recent[0][0] <= minute - cfg.fall_asleep_window_minutes * MINUTE:
+            recent.popleft()
+        if asleep is None:
+            if kind == Minute.STILL and sum(still for _, still in recent) >= cfg.fall_asleep_minutes:
+                asleep = next(m for m, still in recent if still)
+        elif kind == Minute.RESTLESS:
+            restless.append(minute)
+            while restless[0] <= minute - cfg.wake_window_minutes * MINUTE:
+                restless.popleft()
+            if len(restless) >= cfg.wake_minutes:
+                wake(restless[0])
     if last is not None:
         wake(last + MINUTE, ongoing=True)
     return periods

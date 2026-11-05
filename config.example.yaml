@@ -69,9 +69,11 @@ sleep:
   # eyes also counts as sleep, and only the crib is seen.
   frame_motion: 0.02        # a frame counts as movement when this share of the baby's area changed
   restless_share: 0.3       # a minute is restless when this share of its frames had movement
-  fall_asleep_minutes: 10   # asleep after this many still minutes in a row
+  fall_asleep_minutes: 8    # asleep after this many still minutes...
+  fall_asleep_window_minutes: 10  # ...within this many minutes
   wake_minutes: 7           # awake after this many restless minutes...
   wake_window_minutes: 10   # ...within this many minutes
+  out_minutes: 3            # taken out of the crib after this many minutes in a row without the baby
 
 storage:
   db_path: data/noggin-compass.db

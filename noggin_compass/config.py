@@ -38,9 +38,18 @@ class DetectorConfig:
     upright: bool = True
     min_person_conf: float = 0.35
     # A person smaller than this share of the frame (after camera.roi) is ignored. With the frame
-    # cropped to the crib, a newborn takes 10% or more, while toys on the rail and strips of the
-    # rail that the network takes for people in an empty crib take 0.5-2.5%.
-    min_person_area: float = 0.03
+    # cropped to the crib, a baby takes 10% or more, while the "people" the network finds in an
+    # empty crib (toys, the rail, the sheet print) take 1-6%.
+    min_person_area: float = 0.06
+    # A "person" whose face points (nose, eyes, ears) span less than this share of the frame
+    # width (after camera.roi) is not the baby. The baby's face spans 4-7% of a frame cropped to
+    # the crib, the faces the network finds in the sheet print 1% or less. 0 turns off this check
+    # and faceless_seconds.
+    min_face_size: float = 0.015
+    # A find without a face (or one only the rough first pass saw) counts for this many seconds
+    # after the baby's face was last seen. A baby asleep in profile hides its face on many frames;
+    # clothes laid out in the crib have no face at all.
+    faceless_seconds: float = 30
     min_keypoint_conf: float = 0.4
 
 

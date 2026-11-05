@@ -73,6 +73,15 @@ def body_up(person: Person, min_conf: float) -> np.ndarray | None:
     return up / norm if norm > 1e-6 else None
 
 
+def face_size(person: Person, min_conf: float) -> float:
+    """Largest distance between the face points (nose, eyes, ears) the model is sure of, in
+    pixels. 0 if fewer than two of them are seen."""
+    points = person.xy[:5][person.conf[:5] >= min_conf]
+    if len(points) < 2:
+        return 0.0
+    return float(max(np.linalg.norm(a - b) for a in points for b in points))
+
+
 def _overlap(a: np.ndarray, b: np.ndarray) -> bool:
     """Whether two x1, y1, x2, y2 boxes share any area."""
     return bool(a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3])
@@ -101,6 +110,8 @@ class PoseDetector:
         min_person_conf: float = 0.35,
         imgsz: int = 640,
         min_person_area: float = 0.0,
+        min_face_size: float = 0.0,
+        faceless_seconds: float = 30.0,
     ):
         if not Path(model).exists() and Path(model).parent == Path("."):
             # A bare name like yolo26m-pose.pt: ultralytics will download it, so keep it in models/.
@@ -118,8 +129,11 @@ class PoseDetector:
         self.device = device
         self.min_person_conf = min_person_conf
         self.min_person_area = min_person_area
+        self.min_face_size = min_face_size
+        self.faceless_seconds = faceless_seconds
         self.imgsz = imgsz
         self._memory: tuple[float, np.ndarray, np.ndarray] | None = None  # time, box, up
+        self._face_seen: float | None = None  # when the baby's face was last seen
 
     def detect(
         self,
@@ -147,6 +161,50 @@ class PoseDetector:
         conf = keypoints.conf[i].cpu().numpy() if keypoints.conf is not None else np.ones(len(xy))
         return Person(boxes[i], float(result.boxes.conf[i]), xy, conf)
 
+    def _face_kind(self, person: Person, frame_width: int, min_conf: float) -> str:
+        """"face", "tiny" (face points too close together to be a baby's face) or "none"."""
+        if int((person.conf[:5] >= min_conf).sum()) < 2:
+            return "none"
+        return "face" if face_size(person, min_conf) >= self.min_face_size * frame_width else "tiny"
+
+    def accept(
+        self,
+        person: Person | None,
+        frame_width: int,
+        min_conf: float,
+        now: float | None = None,
+        confirmed: bool = True,
+    ) -> Person | None:
+        """The find if it can be the baby, else None.
+
+        With the low person threshold a sleep sack needs, an empty crib yields "people" in the
+        sheet print, in toys and in clothes laid out in it. The faces the network finds on them
+        are specks of the print, a few times smaller than the baby's face, so a face smaller than
+        min_face_size of the frame width rules a find out. A find without a face counts only for
+        faceless_seconds after the baby's face was seen: a baby asleep in profile hides its face on
+        many frames, while clothes and prints have no face at all. An unconfirmed find (the
+        second pass saw nobody there) is treated the same way. min_face_size 0 turns this off."""
+        if person is None or self.min_face_size <= 0:
+            return person
+        kind = self._face_kind(person, frame_width, min_conf)
+        if kind == "tiny":
+            return None
+        if kind == "face" and confirmed:
+            return person
+        seen = self._face_seen
+        recent = now is not None and seen is not None and now - seen <= self.faceless_seconds
+        return person if recent else None
+
+    def _note_face(self, person: Person | None, width: int, min_conf: float, now: float | None) -> None:
+        if person is not None and now is not None and self._face_kind(person, width, min_conf) == "face":
+            self._face_seen = now
+
+    def detect_single(self, frame: np.ndarray, min_conf: float, now: float | None = None) -> Person | None:
+        """One pass, with the same check of the find as detect_upright."""
+        person = self.accept(self.detect(frame), frame.shape[1], min_conf, now)
+        self._note_face(person, frame.shape[1], min_conf, now)
+        return person
+
     def detect_upright(self, frame: np.ndarray, min_conf: float, now: float | None = None) -> Person | None:
         """Two passes. The model was trained on standing and sitting people and confuses face
         points, especially the ears, on a baby lying across the frame. The first pass finds the
@@ -155,20 +213,27 @@ class PoseDetector:
 
         With `now` (seconds), the crop of the last baby found in the past MEMORY_SECONDS is tried
         too, and the second pass the model is more sure of wins. If the fresh box and the
-        remembered one do not touch, the larger box wins instead."""
+        remembered one do not touch, the larger box wins instead. Every find goes through
+        accept() first."""
+        width = frame.shape[1]
         first = self.detect(frame)
         up = body_up(first, min_conf) if first is not None else None
-        fresh = self._second_pass(frame, first.box, up) if up is not None else None
+        fresh = None
+        if up is not None:
+            fresh = self.accept(self._second_pass(frame, first.box, up), width, min_conf, now)
         best = fresh
         if self._memory is not None and now is not None and now - self._memory[0] <= MEMORY_SECONDS:
             # Also wins over a fresh detection that is something else (a glowing toy, a hand).
-            old = self._second_pass(frame, *self._memory[1:])
+            old = self.accept(self._second_pass(frame, *self._memory[1:]), width, min_conf, now)
             if old is not None and (best is None or self._prefer_remembered(first.box, fresh, old)):
                 best = old
         if fresh is not None and best is fresh and now is not None:
             self._memory = (now, first.box, up)
         if best is None and first is not None:
-            return replace(first, up=up)
+            # The second pass did not confirm the first find. At night that is often the baby in a
+            # sleep sack, in the daytime clothes laid out in the crib.
+            return self.accept(replace(first, up=up), width, min_conf, now, confirmed=False)
+        self._note_face(best, width, min_conf, now)
         return best
 
     def _prefer_remembered(self, box: np.ndarray, fresh: Person, old: Person) -> bool:

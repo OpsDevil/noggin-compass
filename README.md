@@ -74,9 +74,19 @@ flowchart TD
   bumper next to the head was found instead of the baby, the larger one wins: in a crib that is
   the baby.
 * **Empty crib.** To find a baby in a sleep sack, the person threshold has to be low, and then an
-  empty crib yields "people" too: a toy on the rail, a strip of the rail at the edge of the frame.
-  Next to a baby they are tiny, so anything smaller than `detector.min_person_area` of the frame is
-  ignored, see [Configuration](#configuration).
+  empty crib yields "people" too: in the sheet print, in toys, in clothes laid out in the crib.
+  On our camera that gave about an hour a day of made-up "not visible" and head turns, and even
+  made-up sleep. Three checks rule them out, see [Configuration](#configuration):
+  * a "person" smaller than `detector.min_person_area` of the frame is ignored: a baby takes 10%
+    or more of a frame cropped to the crib, the false ones 1-6%;
+  * the face must not be tiny: the faces the network finds in a print are specks, several times
+    smaller than a baby's face (`detector.min_face_size`);
+  * a find without a face counts only for `detector.faceless_seconds` after the baby's face was
+    seen. A baby asleep in profile hides its face on many frames, while clothes have no face at
+    all. The same goes for a find that only the rough first pass made.
+
+  On a day and a half of snapshots this left 67 of the 362 false finds in an empty crib and no
+  made-up sleep, while the baby's real sleep came out the same.
 * **Geometry, not magic.** Think of the head as a ball. When it turns, the face moves sideways
   while the ears move towards the middle, so the face position between the ears tells the angle.
   The score is 0 for straight, about 0.35 at 20 degrees and 1 for a full profile; positive means
@@ -301,7 +311,9 @@ All options with their defaults are in [`config.example.yaml`](config.example.ya
 | `detector.imgsz` | `640` | How detailed a picture the network gets. In an overhead view the head is small, and 1280 finds the face points much more reliably, at the cost of speed. |
 | `detector.upright` | `true` | The second pass on a crop with the baby turned head-up. Switch it off only to save CPU. |
 | `detector.min_person_conf` | `0.35` | How sure the network must be that it sees a person at all. Lower it if the baby under a blanket is often "not in frame". |
-| `detector.min_person_area` | `0.03` | A "person" smaller than this share of the frame is ignored. With the frame cropped to the crib (`camera.roi`), a newborn takes 10% of it or more, while the toys and strips of the rail that the network took for people in an empty crib took 0.5-2.5% on our camera. Lower it if the baby is small in the frame (a camera mounted high, no `camera.roi`) and the program says "not in frame" while the baby is there. Raise it if the preview still finds people in an empty crib. The real sizes on your camera are in the `box` field of `analysis.jsonl` next to the snapshots, in pixels of the cropped frame. |
+| `detector.min_person_area` | `0.06` | A "person" smaller than this share of the frame is ignored. With the frame cropped to the crib (`camera.roi`), a baby takes 10% of it or more, while the toys, the rail and the sheet print that the network took for people in an empty crib took 1-6% on our camera. Lower it if the baby is small in the frame (a camera mounted high, no `camera.roi`) and the program says "not in frame" while the baby is there. Raise it if the preview still finds people in an empty crib. The real sizes on your camera are in the `box` field of `analysis.jsonl` next to the snapshots, in pixels of the cropped frame. |
+| `detector.min_face_size` | `0.015` | A "person" whose face points (nose, eyes, ears) span less than this share of the frame width is not the baby. On our camera the baby's face spans 4-7% of the frame width, the faces the network found in the sheet print 1% or less. Lower it if the baby is small in the frame and often "not in frame", raise it if the preview still draws faces on an empty crib. `0` turns off this check and `faceless_seconds`. |
+| `detector.faceless_seconds` | `30` | A "person" without a face counts as the baby for this many seconds after the baby's face was last seen, then it is "not in frame". A baby asleep with the face turned away hides it for a few seconds at a time, clothes laid out in the crib have no face at all. A baby on its tummy shows no face either, so tummy time soon counts as out of the crib. Raise it if the sleep of a baby who turns away breaks into pieces, lower it if clothes or toys in the crib still show up as "not visible". |
 | `detector.min_keypoint_conf` | `0.4` | Keypoints with lower confidence are ignored. Raising it makes the program more cautious: more "not visible", fewer mistakes. |
 | **head** | | |
 | `head.center_threshold` | `0.35` | How far the head has to turn before it counts as left or right instead of straight. 0.35 is about 20 degrees. Raise it if slight turns are counted as left or right, lower it to catch them. |

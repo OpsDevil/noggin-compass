@@ -27,7 +27,9 @@ detector:
   imgsz: 640                # picture size for the network; 1280 for an overhead camera
   upright: true             # second pass on a crop with the baby turned head-up
   min_person_conf: 0.35     # how sure the network must be that it sees a person
-  min_person_area: 0.03     # a "person" smaller than this share of the frame is ignored
+  min_person_area: 0.06     # a "person" smaller than this share of the frame is ignored
+  min_face_size: 0.015      # a "person" whose face spans less of the frame width is not the baby
+  faceless_seconds: 30      # a "person" without a face counts this long after the face was seen
   min_keypoint_conf: 0.4    # keypoints below this confidence are ignored
 
 head:

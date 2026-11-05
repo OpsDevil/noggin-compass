@@ -38,7 +38,7 @@ def analyze(
     if cfg.detector.upright:
         person = detector.detect_upright(frame, cfg.detector.min_keypoint_conf, now)
     else:
-        person = detector.detect(frame)
+        person = detector.detect_single(frame, cfg.detector.min_keypoint_conf, now)
     if person is None:
         return HeadEstimate(Side.ABSENT, method="no_person"), None
     estimate = estimate_head(
@@ -106,6 +106,8 @@ def run(cfg: Config, args: argparse.Namespace) -> None:
         cfg.detector.min_person_conf,
         cfg.detector.imgsz,
         cfg.detector.min_person_area,
+        cfg.detector.min_face_size,
+        cfg.detector.faceless_seconds,
     )
     storage = Storage(cfg.storage.db_path)
     tracker = SideTracker(cfg.tracking.confirm_seconds, cfg.tracking.gap_seconds)

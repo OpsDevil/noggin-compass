@@ -53,7 +53,7 @@ class ScriptedDetector(PoseDetector):
         self.first = None
         self.crops = []  # second-pass results, in call order
 
-    def detect(self, frame, min_person_conf=None):
+    def detect(self, frame, min_person_conf=None, min_person_area=None):
         if min_person_conf is None:
             return self.first
         return self.crops.pop(0)
@@ -115,3 +115,119 @@ def test_without_time_nothing_is_remembered():
     det.detect_upright(FRAME, 0.4)
     det.first = None
     assert det.detect_upright(FRAME, 0.4) is None
+
+
+def test_fresh_box_away_from_the_baby_loses_even_when_stronger():
+    det = ScriptedDetector()
+    det.first = lying_baby(0.5)
+    det.crops = [Person(np.zeros(4), 0.5, np.ones((17, 2)), np.ones(17))]
+    det.detect_upright(FRAME, 0.4, now=0.0)
+
+    # The first pass misses the baby and finds the rolled bumper beside its head instead. The
+    # bumper's crop catches the edge of the real head and scores higher than the baby's crop.
+    det.first = lying_baby(0.3, box=(520.0, 100.0, 630.0, 300.0))
+    det.crops = [
+        Person(np.zeros(4), 0.7, np.ones((17, 2)), np.ones(17)),  # fresh crop: the bumper
+        Person(np.zeros(4), 0.4, np.ones((17, 2)), np.ones(17)),  # remembered crop: the baby
+    ]
+    person = det.detect_upright(FRAME, 0.4, now=5.0)
+    assert person.score == 0.4
+    assert person.box == pytest.approx([100, 100, 500, 300])
+    assert det._memory[1] == pytest.approx([100, 100, 500, 300])
+
+
+def test_stronger_fresh_box_on_the_baby_wins_and_is_remembered():
+    det = ScriptedDetector()
+    det.first = lying_baby(0.5)
+    det.crops = [Person(np.zeros(4), 0.4, np.ones((17, 2)), np.ones(17))]
+    det.detect_upright(FRAME, 0.4, now=0.0)
+
+    det.first = lying_baby(0.5, box=(120.0, 110.0, 520.0, 310.0))
+    det.crops = [
+        Person(np.zeros(4), 0.6, np.ones((17, 2)), np.ones(17)),
+        Person(np.zeros(4), 0.4, np.ones((17, 2)), np.ones(17)),
+    ]
+    person = det.detect_upright(FRAME, 0.4, now=5.0)
+    assert person.score == 0.6
+    assert det._memory == (5.0, pytest.approx([120, 110, 520, 310]), pytest.approx([1.0, 0.0]))
+
+
+def test_baby_beats_a_remembered_bumper_even_when_weaker():
+    det = ScriptedDetector()
+    det.first = lying_baby(0.3, box=(520.0, 100.0, 630.0, 300.0))
+    det.crops = [Person(np.zeros(4), 0.7, np.ones((17, 2)), np.ones(17))]
+    det.detect_upright(FRAME, 0.4, now=0.0)  # only the bumper was found, so it is remembered
+
+    det.first = lying_baby(0.5)
+    det.crops = [
+        Person(np.zeros(4), 0.4, np.ones((17, 2)), np.ones(17)),  # fresh crop: the baby
+        Person(np.zeros(4), 0.7, np.ones((17, 2)), np.ones(17)),  # remembered crop: the bumper
+    ]
+    person = det.detect_upright(FRAME, 0.4, now=5.0)
+    assert person.box == pytest.approx([100, 100, 500, 300])
+    assert det._memory[1] == pytest.approx([100, 100, 500, 300])
+
+
+def test_baby_moved_elsewhere_is_found_once_the_old_place_is_empty():
+    det = ScriptedDetector()
+    det.first = lying_baby(0.5)
+    det.crops = [Person(np.zeros(4), 0.4, np.ones((17, 2)), np.ones(17))]
+    det.detect_upright(FRAME, 0.4, now=0.0)
+
+    det.first = lying_baby(0.5, box=(520.0, 100.0, 630.0, 300.0))
+    det.crops = [Person(np.zeros(4), 0.5, np.ones((17, 2)), np.ones(17)), None]
+    person = det.detect_upright(FRAME, 0.4, now=5.0)
+    assert person.box == pytest.approx([520, 100, 630, 300])
+
+
+class _Tensor:
+    """Just enough of a torch tensor for PoseDetector.detect."""
+
+    def __init__(self, values):
+        self.values = np.asarray(values, dtype=float)
+
+    def cpu(self):
+        return self
+
+    def numpy(self):
+        return self.values
+
+    def __getitem__(self, i):
+        return _Tensor(self.values[i])
+
+    def __len__(self):
+        return len(self.values)
+
+    def __float__(self):
+        return float(self.values)
+
+
+class _Model:
+    def __init__(self, boxes):
+        n = len(boxes)
+        boxes_obj = type("Boxes", (), {"xyxy": _Tensor(boxes), "conf": _Tensor([0.5] * n), "__len__": lambda self: n})
+        keypoints = type("Keypoints", (), {"xy": _Tensor(np.zeros((n, 17, 2))), "conf": _Tensor(np.ones((n, 17)))})
+        self.result = type("Result", (), {"boxes": boxes_obj(), "keypoints": keypoints()})()
+
+    def predict(self, frame, **kwargs):
+        return [self.result]
+
+
+def detector_seeing(boxes, min_person_area):
+    det = object.__new__(PoseDetector)
+    det.model, det.device, det.imgsz = _Model(boxes), "cpu", 640
+    det.min_person_conf, det.min_person_area = 0.1, min_person_area
+    return det
+
+
+def test_people_smaller_than_min_area_are_ignored():
+    # A toy on the crib rail: 2% of a 640x480 frame.
+    toy = [10.0, 10.0, 88.0, 89.0]
+    assert detector_seeing([toy], 0.03).detect(FRAME) is None
+    assert detector_seeing([toy], 0.0).detect(FRAME) is not None
+    # The largest one is still picked when it is big enough.
+    baby = [100.0, 100.0, 500.0, 300.0]
+    person = detector_seeing([toy, baby], 0.03).detect(FRAME)
+    assert person.box == pytest.approx(baby)
+    # The second pass looks at a crop around the baby and ignores the limit.
+    assert detector_seeing([toy], 0.03).detect(FRAME, min_person_area=0.0) is not None

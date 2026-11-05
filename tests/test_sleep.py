@@ -45,7 +45,7 @@ def test_minute_without_movement_data_is_missing():
 
 
 def test_falls_asleep_after_still_minutes_and_dates_it_back():
-    periods = find_sleep(frames("mmm" + "s" * 30 + "mmmm"), CFG)
+    periods = find_sleep(frames("mmm" + "s" * 30 + "m" * 7), CFG)
     assert len(periods) == 1
     assert periods[0].start == minutes_after(3)
     assert periods[0].end == minutes_after(33)
@@ -60,6 +60,19 @@ def test_twitches_and_single_restless_minutes_do_not_wake():
     periods = find_sleep(frames("s" * 20 + "tmtsmss" + "s" * 20), CFG)
     assert len(periods) == 1
     assert periods[0].seconds == pytest.approx(47 * 60)
+
+
+def test_head_turns_in_light_sleep_do_not_wake():
+    # Toward morning, with eyes closed, a newborn turns its head every few minutes and a parent
+    # fixes the blanket: bursts of up to 4 restless minutes between short calm spells.
+    pattern = "s" * 15 + "mmmmsmssm" + "sssss" + "mmm" + "sssss" + "mmm" + "s" * 10
+    (period,) = find_sleep(frames(pattern), CFG)
+    assert period.seconds == len(pattern) * 60
+
+
+def test_restless_for_long_wakes():
+    periods = find_sleep(frames("s" * 20 + "msmmmmmm" + "s" * 5), CFG)
+    assert [(p.start, p.end) for p in periods] == [(T0, minutes_after(20))]
 
 
 def test_taken_out_of_crib_ends_sleep():
@@ -79,7 +92,7 @@ def test_long_gap_ends_sleep_short_one_does_not():
 
 
 def test_waking_during_a_gap_shows_after_it():
-    periods = find_sleep(frames("s" * 20 + "_" * 10 + "mmmm" + "s" * 3), CFG)
+    periods = find_sleep(frames("s" * 20 + "_" * 10 + "m" * 7 + "s" * 3), CFG)
     assert [(p.start, p.end) for p in periods] == [(T0, minutes_after(30))]
 
 
@@ -94,7 +107,7 @@ def test_sleep_still_going_is_ongoing():
 def test_state_unknown_without_recent_movement_data():
     samples = frames("s" * 15)
     assert sleep_state(samples, CFG, samples[-1][0] + timedelta(hours=1)) == (None, None)
-    samples = frames("s" * 15 + "mmmm")
+    samples = frames("s" * 15 + "m" * 7)
     assert sleep_state(samples, CFG, samples[-1][0]) == (False, None)
 
 

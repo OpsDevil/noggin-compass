@@ -37,6 +37,10 @@ class DetectorConfig:
     # found much more reliably when the baby lies across the frame.
     upright: bool = True
     min_person_conf: float = 0.35
+    # A person smaller than this share of the frame (after camera.roi) is ignored. With the frame
+    # cropped to the crib, a newborn takes 10% or more, while toys on the rail and strips of the
+    # rail that the network takes for people in an empty crib take 0.5-2.5%.
+    min_person_area: float = 0.03
     min_keypoint_conf: float = 0.4
 
 
@@ -68,8 +72,10 @@ class AlertsConfig:
     # the head is on it again. 0 disables.
     max_imbalance_minutes: float = 0
     window_hours: float = 12
-    # A turn to the other side shorter than this does not end the stint on the first side.
-    min_turn_minutes: float = 15
+    # A turn to the other side shorter than this does not end the stint on the first side. Toward
+    # morning a newborn turns its head on its own every few minutes, for up to ~10 minutes each
+    # time; with a longer limit those turns were ignored and the alert claimed hours on one side.
+    min_turn_minutes: float = 10
     # Repeat interval of the alert while the head stays on the overloaded side.
     repeat_minutes: float = 15
     # Play a sound on the computer running the program (macOS only).
@@ -99,9 +105,12 @@ class SleepConfig:
     restless_share: float = 0.3
     # Asleep after this many still minutes in a row; the sleep starts at the first of them.
     fall_asleep_minutes: int = 10
-    # Awake after wake_minutes restless minutes within wake_window_minutes.
-    wake_minutes: int = 3
-    wake_window_minutes: int = 5
+    # Awake after wake_minutes restless minutes within wake_window_minutes. In light morning
+    # sleep, with eyes closed, a newborn turns its head every 1-3 minutes and parents fix the
+    # blanket, giving 3-4 restless minutes in a row; a baby that is really awake stays restless
+    # far longer.
+    wake_minutes: int = 7
+    wake_window_minutes: int = 10
 
 
 @dataclass

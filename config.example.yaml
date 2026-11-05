@@ -27,6 +27,7 @@ detector:
   imgsz: 640                # picture size for the network; 1280 for an overhead camera
   upright: true             # second pass on a crop with the baby turned head-up
   min_person_conf: 0.35     # how sure the network must be that it sees a person
+  min_person_area: 0.03     # a "person" smaller than this share of the frame is ignored
   min_keypoint_conf: 0.4    # keypoints below this confidence are ignored
 
 head:
@@ -47,7 +48,7 @@ alerts:
   max_imbalance_minutes: 0  # alert when one side is ahead of the other by this much over the
                             # last window_hours and the head is on that side again
   window_hours: 12          # how far back the balance is counted
-  min_turn_minutes: 15      # a turn to the other side shorter than this does not count
+  min_turn_minutes: 10      # a turn to the other side shorter than this does not count
   repeat_minutes: 15        # repeat the alert this often while the head stays on that side
   sound: true               # play a sound (macOS)
   sound_file: Funk          # a macOS system sound (Funk, Glass, Sosumi, Basso...) or a file path
@@ -69,8 +70,8 @@ sleep:
   frame_motion: 0.02        # a frame counts as movement when this share of the baby's area changed
   restless_share: 0.3       # a minute is restless when this share of its frames had movement
   fall_asleep_minutes: 10   # asleep after this many still minutes in a row
-  wake_minutes: 3           # awake after this many restless minutes...
-  wake_window_minutes: 5    # ...within this many minutes
+  wake_minutes: 7           # awake after this many restless minutes...
+  wake_window_minutes: 10   # ...within this many minutes
 
 storage:
   db_path: data/noggin-compass.db

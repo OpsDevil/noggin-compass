@@ -73,6 +73,15 @@ def body_up(person: Person, min_conf: float) -> np.ndarray | None:
     return up / norm if norm > 1e-6 else None
 
 
+def _overlap(a: np.ndarray, b: np.ndarray) -> bool:
+    """Whether two x1, y1, x2, y2 boxes share any area."""
+    return bool(a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3])
+
+
+def _area(box: np.ndarray) -> float:
+    return float((box[2] - box[0]) * (box[3] - box[1]))
+
+
 def _disable_telemetry() -> None:
     # Ultralytics sends anonymous usage stats by default. No video leaves the machine either way,
     # but there is no reason to send the stats.
@@ -86,7 +95,12 @@ def _disable_telemetry() -> None:
 
 class PoseDetector:
     def __init__(
-        self, model: str, device: str = "cpu", min_person_conf: float = 0.35, imgsz: int = 640
+        self,
+        model: str,
+        device: str = "cpu",
+        min_person_conf: float = 0.35,
+        imgsz: int = 640,
+        min_person_area: float = 0.0,
     ):
         if not Path(model).exists() and Path(model).parent == Path("."):
             # A bare name like yolo26m-pose.pt: ultralytics will download it, so keep it in models/.
@@ -103,19 +117,30 @@ class PoseDetector:
         self.model = YOLO(model)
         self.device = device
         self.min_person_conf = min_person_conf
+        self.min_person_area = min_person_area
         self.imgsz = imgsz
         self._memory: tuple[float, np.ndarray, np.ndarray] | None = None  # time, box, up
 
-    def detect(self, frame: np.ndarray, min_person_conf: float | None = None) -> Person | None:
+    def detect(
+        self,
+        frame: np.ndarray,
+        min_person_conf: float | None = None,
+        min_person_area: float | None = None,
+    ) -> Person | None:
         conf = self.min_person_conf if min_person_conf is None else min_person_conf
+        min_area = self.min_person_area if min_person_area is None else min_person_area
         result = self.model.predict(
             frame, conf=conf, device=self.device, imgsz=self.imgsz, verbose=False
         )[0]
         if result.keypoints is None or result.boxes is None or len(result.boxes) == 0:
             return None
         boxes = result.boxes.xyxy.cpu().numpy()
-        # In a crib, the person we want is the largest one in the frame.
+        # In a crib, the person we want is the largest one in the frame. With the low person
+        # threshold a sleep sack needs, the empty crib also yields small "people": a toy on the
+        # rail, a strip of the rail at the edge of the frame. They are far smaller than a baby.
         areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+        if areas.max() < min_area * frame.shape[0] * frame.shape[1]:
+            return None
         i = int(areas.argmax())
         keypoints = result.keypoints
         xy = keypoints.xy[i].cpu().numpy()
@@ -129,7 +154,8 @@ class PoseDetector:
         detected much better. Keypoints are returned in source frame coordinates.
 
         With `now` (seconds), the crop of the last baby found in the past MEMORY_SECONDS is tried
-        too, and the second pass the model is more sure of wins."""
+        too, and the second pass the model is more sure of wins. If the fresh box and the
+        remembered one do not touch, the larger box wins instead."""
         first = self.detect(frame)
         up = body_up(first, min_conf) if first is not None else None
         fresh = self._second_pass(frame, first.box, up) if up is not None else None
@@ -137,7 +163,7 @@ class PoseDetector:
         if self._memory is not None and now is not None and now - self._memory[0] <= MEMORY_SECONDS:
             # Also wins over a fresh detection that is something else (a glowing toy, a hand).
             old = self._second_pass(frame, *self._memory[1:])
-            if old is not None and (best is None or old.score > best.score):
+            if old is not None and (best is None or self._prefer_remembered(first.box, fresh, old)):
                 best = old
         if fresh is not None and best is fresh and now is not None:
             self._memory = (now, first.box, up)
@@ -145,13 +171,21 @@ class PoseDetector:
             return replace(first, up=up)
         return best
 
+    def _prefer_remembered(self, box: np.ndarray, fresh: Person, old: Person) -> bool:
+        if _overlap(box, old.box):
+            return old.score > fresh.score
+        # Two different things, such as the baby and a rolled bumper next to its head. The
+        # bumper's crop can score higher because it catches the edge of the real head, so the
+        # score does not decide here: the baby is the larger one, as in detect().
+        return _area(old.box) > _area(box)
+
     def _second_pass(self, frame: np.ndarray, box: np.ndarray, up: np.ndarray) -> Person | None:
         view = UprightView.around(box, up, self.imgsz)
         crop = cv2.warpAffine(frame, view.matrix(), (view.size, view.size))
         # The first pass already found the baby, so a lower person threshold is safe here: under
         # a blanket, person confidence on the crop can be low. Keypoint confidences from the first
         # pass are not trusted: it is confidently wrong on a baby lying across the frame.
-        second = self.detect(crop, min_person_conf=UPRIGHT_PERSON_CONF)
+        second = self.detect(crop, min_person_conf=UPRIGHT_PERSON_CONF, min_person_area=0.0)
         if second is None:
             return None
         xy = view.to_frame(second.xy)

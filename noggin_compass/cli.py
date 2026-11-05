@@ -100,7 +100,11 @@ def run(cfg: Config, args: argparse.Namespace) -> None:
     source_spec = args.source if args.source is not None else cfg.camera.source
     source = open_source(source_spec, start=args.start, password=cfg.camera.password)
     detector = PoseDetector(
-        cfg.detector.model, cfg.detector.device, cfg.detector.min_person_conf, cfg.detector.imgsz
+        cfg.detector.model,
+        cfg.detector.device,
+        cfg.detector.min_person_conf,
+        cfg.detector.imgsz,
+        cfg.detector.min_person_area,
     )
     storage = Storage(cfg.storage.db_path)
     tracker = SideTracker(cfg.tracking.confirm_seconds, cfg.tracking.gap_seconds)

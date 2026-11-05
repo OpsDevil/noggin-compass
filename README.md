@@ -70,7 +70,13 @@ flowchart TD
   minute, and the second pass the model is more sure of wins. If the second pass does not see the
   shoulders, the body axis from the first pass is used. On an evening recording this cut frames
   without an answer from 77 of 229 to 18, and the left/right flips on a baby lying still almost
-  disappeared.
+  disappeared. When the fresh find and the remembered one do not touch, for example a rolled
+  bumper next to the head was found instead of the baby, the larger one wins: in a crib that is
+  the baby.
+* **Empty crib.** To find a baby in a sleep sack, the person threshold has to be low, and then an
+  empty crib yields "people" too: a toy on the rail, a strip of the rail at the edge of the frame.
+  Next to a baby they are tiny, so anything smaller than `detector.min_person_area` of the frame is
+  ignored, see [Configuration](#configuration).
 * **Geometry, not magic.** Think of the head as a ball. When it turns, the face moves sideways
   while the ears move towards the middle, so the face position between the ears tells the angle.
   The score is 0 for straight, about 0.35 at 20 degrees and 1 for a full profile; positive means
@@ -246,8 +252,8 @@ barely moves, an awake one turns, kicks and waves its arms. This is how sleep ac
 * The baby is **asleep** after `sleep.fall_asleep_minutes` still minutes in a row, counted from the
   first of them.
 * The baby is **awake** after `sleep.wake_minutes` restless minutes within
-  `sleep.wake_window_minutes`, or as soon as it is taken out of the crib. Twitches and a single
-  restless minute during sleep do not count.
+  `sleep.wake_window_minutes`, or as soon as it is taken out of the crib. Twitches and head turns
+  during sleep do not count, even when they go on for a few minutes in a row.
 
 `noggin-compass report` shows sleep per day and the list of sleeps, `/sleep` in Telegram the same
 for the last 24 hours, `/now` whether the baby is asleep right now. The raw movement of every frame
@@ -285,6 +291,7 @@ All options with their defaults are in [`config.example.yaml`](config.example.ya
 | `detector.imgsz` | `640` | How detailed a picture the network gets. In an overhead view the head is small, and 1280 finds the face points much more reliably, at the cost of speed. |
 | `detector.upright` | `true` | The second pass on a crop with the baby turned head-up. Switch it off only to save CPU. |
 | `detector.min_person_conf` | `0.35` | How sure the network must be that it sees a person at all. Lower it if the baby under a blanket is often "not in frame". |
+| `detector.min_person_area` | `0.03` | A "person" smaller than this share of the frame is ignored. With the frame cropped to the crib (`camera.roi`), a newborn takes 10% of it or more, while the toys and strips of the rail that the network took for people in an empty crib took 0.5-2.5% on our camera. Lower it if the baby is small in the frame (a camera mounted high, no `camera.roi`) and the program says "not in frame" while the baby is there. Raise it if the preview still finds people in an empty crib. The real sizes on your camera are in the `box` field of `analysis.jsonl` next to the snapshots, in pixels of the cropped frame. |
 | `detector.min_keypoint_conf` | `0.4` | Keypoints with lower confidence are ignored. Raising it makes the program more cautious: more "not visible", fewer mistakes. |
 | **head** | | |
 | `head.center_threshold` | `0.35` | How far the head has to turn before it counts as left or right instead of straight. 0.35 is about 20 degrees. Raise it if slight turns are counted as left or right, lower it to catch them. |
@@ -298,7 +305,7 @@ All options with their defaults are in [`config.example.yaml`](config.example.ya
 | `alerts.max_same_side_minutes` | `0` (off) | Alert when the head has stayed on one side this many minutes, see [Turn alerts](#turn-alerts-and-telegram). |
 | `alerts.max_imbalance_minutes` | `0` (off) | Alert when one side is ahead of the other by this many minutes over `alerts.window_hours` and the head is on that side again. |
 | `alerts.window_hours` | `12` | How far back the balance between the sides is counted. |
-| `alerts.min_turn_minutes` | `15` | A turn to the other side shorter than this does not interrupt a stint on the first side. |
+| `alerts.min_turn_minutes` | `10` | A turn to the other side shorter than this does not interrupt a stint on the first side. |
 | `alerts.repeat_minutes` | `15` | How often the alert repeats while the head stays on that side. |
 | `alerts.sound` | `true` | Play a sound with the alert (macOS). |
 | `alerts.sound_file` | `Funk` | Which sound: the name of a macOS system sound (Funk, Glass, Sosumi, Basso...) or a path to a sound file. |
@@ -310,8 +317,8 @@ All options with their defaults are in [`config.example.yaml`](config.example.ya
 | `sleep.frame_motion` | `0.02` | A frame counts as movement when this share of the baby's area changed since the previous frame. |
 | `sleep.restless_share` | `0.3` | A minute is restless when at least this share of its frames had movement. |
 | `sleep.fall_asleep_minutes` | `10` | Asleep after this many still minutes in a row; the sleep starts at the first of them. |
-| `sleep.wake_minutes` | `3` | Awake after this many restless minutes... |
-| `sleep.wake_window_minutes` | `5` | ...within this many minutes. |
+| `sleep.wake_minutes` | `7` | Awake after this many restless minutes... |
+| `sleep.wake_window_minutes` | `10` | ...within this many minutes. |
 | **storage** | | |
 | `storage.db_path` | `data/noggin-compass.db` | SQLite file with the per-second results. |
 | `storage.snapshots_dir` | `data/snapshots` | Where snapshots are saved. |

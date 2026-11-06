@@ -13,6 +13,11 @@
 
 <p align="center"><b>English</b> | <a href="README.ru.md">Русский</a></p>
 
+<p align="center">
+  <img src="docs/demo.webp" alt="Time-lapse from above of a baby asleep in the crib from 02:02 to 02:38, with the detected points: the verdict RIGHT changes to LEFT when the baby turns the head" width="820">
+  <br><sub>36 minutes of one night, 400x faster: at 02:15 the baby turns the head and RIGHT changes to LEFT.</sub>
+</p>
+
 ---
 
 ## Why

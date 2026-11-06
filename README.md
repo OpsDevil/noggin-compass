@@ -34,12 +34,14 @@ repositioning helps.
 ## What it sees
 
 <p align="center">
-  <img src="docs/what-it-sees.jpg" alt="Overhead view of a sleeping baby with the detected keypoints, head axis and the verdict 'left'" width="820">
+  <img src="docs/what-it-sees.jpg" alt="Overhead view of a sleeping baby with the detected keypoints, head axis, the verdict 'left', and lines in the corner: asleep for 3 h, two thermometer readings" width="820">
 </p>
 
 The debug view (`--preview`) shows everything the program bases its decision on: the detected
 keypoints with their confidence (yellow ones are used, grey ones are too uncertain), the *crown*
-and *baby's left* arrows, and a zoomed-in head.
+and *baby's left* arrows, and a zoomed-in head. In the bottom left corner: whether the baby is
+asleep, and the thermometer readings. `/marked` in Telegram and `noggin-compass draw` show the same
+picture.
 
 ## How it works
 
@@ -519,15 +521,6 @@ Nothing else has to be set up.
   crib is only counted when the parents log it in Telegram.
 * The presence check has been tried on a day and a half of one crib and one camera, not yet with a
   baby under infrared light.
-
-## Roadmap
-
-- [x] Sleep tracking: when the baby fell asleep, woke up, how long each nap was
-- [ ] Accuracy check on night-time infrared footage
-- [ ] Calibration from a set of labelled snapshots
-- [ ] A small local web page with the nightly charts, to check from a phone
-- [ ] Running as a background service on an always-on Mac
-- [ ] An optional pose model under a permissive license, as an alternative to Ultralytics
 
 ## Development
 

@@ -1,10 +1,12 @@
 """The room climate: the cold alarm, tips about the heat and the humidity, and word in Telegram
 when a thermometer is lost or its battery runs low.
 
-The cold alarm is for a window or a door left open at night. It starts quietly, so that a
-draught that passes by itself wakes nobody, and gets loud only if it does not get warmer. Its
-sounds play on the computer running the program, and its messages go to Telegram with an Off
-button; Off silences it for a while, and it comes back if it is still not warmer by then.
+The cold alarm is for a window or a door left open at night. The rule is the limit and nothing
+else: below cold_below it is cold, at cold_below or above it is not. Cold starts quietly, and if
+the first reading taken check_minutes later or after is still below the limit, the alarm gets
+loud. Every decision is made on a new reading, never on a timer alone. Its sounds play on the
+computer running the program, and its messages go to Telegram with an Off button; Off silences
+it for a while, and it comes back if a reading after that is still below the limit.
 """
 
 from __future__ import annotations
@@ -29,15 +31,13 @@ OFF = "climate:off"  # data of the Off button
 MUTE = "climate:mute:"  # + hours: data of the mute buttons
 UNMUTE = "climate:unmute"
 MUTE_CHOICES = (1, 2, 3, 4)  # hours offered as buttons
-# See ClimateWatch._check_silent.
-STUCK_POLLS = 3
 
 
 @dataclass
 class Cold:
     stage: str  # "quiet", "alarm", or "off" for an alarm turned off for a while
     since: datetime  # when the stage began
-    reference: float  # the temperature then: "warmer" means above it by warming_degrees
+    temperature: float  # the temperature then
     reason: str = "climate.alarm"  # what the alarm message says
     sent: datetime | None = None  # the last alarm message
 
@@ -71,7 +71,6 @@ class ClimateWatch:
         self._tips_told: dict[tuple[str, str], datetime] = {}
         self._outbox: list[tuple[str | Reply, bool]] = []
         self._notes: list[str] = []  # for notify
-        self._polled: datetime | None = None  # start of the last poll that finished
         # Muted from Telegram until then (/mute): no cold alarm, no beeping. Only the cold alarm:
         # "time to turn" and the silent camera are not about the room's temperature.
         self._muted_until: datetime | None = None
@@ -128,11 +127,6 @@ class ClimateWatch:
             self._say(text, silent=True)
         self._flush()
 
-    def polled(self, started: datetime) -> None:
-        """A poll that began at `started` has finished: every thermometer had its chance."""
-        with self._lock:
-            self._polled = started
-
     def poll_minutes(self) -> float:
         """Read more often while it is cold or close to it, so the alarm follows the temperature."""
         cold = self.cfg.cold
@@ -163,7 +157,6 @@ class ClimateWatch:
             if self._muted(now):
                 self.cold.clear()
                 return None
-            self._check_silent(now)
             repeat = timedelta(minutes=self.cfg.cold.repeat_minutes)
             for address, state in self.cold.items():
                 if state.stage == "alarm":
@@ -220,7 +213,7 @@ class ClimateWatch:
             ringing = [address for address, state in self.cold.items() if state.stage == "alarm"]
             for address in ringing:
                 reading = self.latest.get(address)
-                temperature = reading.temperature if reading else self.cold[address].reference
+                temperature = reading.temperature if reading else self.cold[address].temperature
                 self.cold[address] = Cold("off", now, temperature)
             # Pressed on a second phone after the first: it is off all the same.
             silenced = any(state.stage == "off" for state in self.cold.values())
@@ -240,7 +233,8 @@ class ClimateWatch:
                 if state.stage == "alarm":
                     lines.append(t("climate.now_alarm", name=name))
                 elif state.stage == "quiet":
-                    lines.append(t("climate.now_quiet", name=name))
+                    limit = self._devices[address].limits_from(self.cfg.limits).cold_below
+                    lines.append(t("climate.now_quiet", name=name, limit=f"{limit:g}"))
                 else:
                     back = state.since + timedelta(minutes=self.cfg.cold.snooze_minutes)
                     lines.append(t("climate.now_off", name=name, time=f"{back:%H:%M}"))
@@ -252,70 +246,42 @@ class ClimateWatch:
         return self._muted_until is not None and now < self._muted_until
 
     def _check_cold(self, device: Thermometer, temperature: float, limit: float, now: datetime) -> None:
-        cfg: ColdAlarmConfig = self.cfg.cold
+        """Below the limit it is cold, at the limit or above it is not: no other rule."""
         address = device.address
         state = self.cold.get(address)
         name = self._name(device)
+        if temperature >= limit:
+            if state is not None:
+                del self.cold[address]
+                text = t("climate.warm" if state.stage == "quiet" else "climate.warm_alarm", name=name,
+                         temperature=f"{temperature:.1f}")
+                log.info(text)
+                # Without a sound: whoever got up for the alarm is awake anyway, and whoever turned
+                # it off and went back to sleep should not be woken by good news.
+                self._say(text, silent=True)
+            return
         if state is None:
-            if temperature < limit:
-                self.cold[address] = Cold("quiet", now, temperature)
-                text = t("climate.cold", name=name, temperature=f"{temperature:.1f}", limit=f"{limit:g}",
-                         minutes=f"{cfg.check_minutes:g}")
-                log.warning(text)
-                # Opened the window on purpose? One tap mutes it.
-                self._say(Reply(text, [self._mute_button()]), silent=False)
+            self.cold[address] = Cold("quiet", now, temperature)
+            text = t("climate.cold", name=name, temperature=f"{temperature:.1f}", limit=f"{limit:g}",
+                     minutes=f"{self.cfg.cold.check_minutes:g}")
+            log.warning(text)
+            # Opened the window on purpose? One tap mutes it.
+            self._say(Reply(text, [self._mute_button()]), silent=False)
             return
-        if temperature >= limit + cfg.warming_degrees:
-            del self.cold[address]
-            text = t("climate.warm" if state.stage == "quiet" else "climate.warm_alarm", name=name,
-                     temperature=f"{temperature:.1f}")
-            log.info(text)
-            # Without a sound: whoever got up for the alarm is awake anyway, and whoever turned it
-            # off and went back to sleep should not be woken by good news.
-            self._say(text, silent=True)
-            return
-        warmer = temperature >= state.reference + cfg.warming_degrees
-        colder = temperature <= state.reference - cfg.colder_degrees
-        waited = now - state.since
-        if state.stage == "quiet":
-            if colder:
-                self.cold[address] = Cold("alarm", now, temperature, "climate.alarm_colder")
-            elif waited >= timedelta(minutes=cfg.check_minutes):
-                # Getting warmer by itself (someone closed the window): give it another while.
-                self.cold[address] = Cold("quiet", now, temperature) if warmer else Cold("alarm", now, temperature)
-        elif state.stage == "off":
-            if colder:
-                self.cold[address] = Cold("alarm", now, temperature, "climate.alarm_colder")
-            elif waited >= timedelta(minutes=cfg.snooze_minutes):
-                self.cold[address] = (
-                    Cold("quiet", now, temperature) if warmer else Cold("alarm", now, temperature, "climate.alarm_again")
-                )
-
-    def _check_silent(self, now: datetime) -> None:
-        """A thermometer that stopped answering while it was cold (a coin cell gives up in the
-        cold) cannot say it got warmer, so it counts as not warmer: the alarm. Its decision is due
-        check_minutes or snooze_minutes into the stage; once a whole poll has begun after that and
-        finished without a reading from it, it has stopped answering. If no poll finishes at all
-        (Bluetooth hangs), the same after STUCK_POLLS polls' worth of time."""
+        # Still below the limit: the alarm, once this new reading comes check_minutes (or
+        # snooze_minutes after Off) into the stage or later.
         cold = self.cfg.cold
-        poll = timedelta(minutes=min(cold.every_minutes, self.cfg.every_minutes), seconds=self.cfg.scan_seconds)
-        for address, state in list(self.cold.items()):
-            wait = {"quiet": cold.check_minutes, "off": cold.snooze_minutes}.get(state.stage)
-            if wait is None:
-                continue
-            due = state.since + timedelta(minutes=wait)
-            reading = self.latest.get(address)
-            if now < due or (reading is not None and reading.time >= due):
-                continue  # not yet, or the reading that decides it has come
-            missed = self._polled is not None and self._polled >= due and (reading is None or reading.time < self._polled)
-            if missed or now - due >= STUCK_POLLS * poll:
-                self.cold[address] = Cold("alarm", now, state.reference, "climate.alarm_silent")
+        wait = {"quiet": cold.check_minutes, "off": cold.snooze_minutes}.get(state.stage)
+        if wait is not None and now - state.since >= timedelta(minutes=wait):
+            reason = "climate.alarm" if state.stage == "quiet" else "climate.alarm_again"
+            self.cold[address] = Cold("alarm", now, temperature, reason)
 
     def _alarm_message(self, address: str, state: Cold, first: bool) -> None:
         reading = self.latest.get(address)
-        temperature = reading.temperature if reading else state.reference
-        text = t(state.reason, name=self._name(self._devices[address]), temperature=f"{temperature:.1f}",
-                 minutes=f"{self.cfg.cold.snooze_minutes:g}")
+        temperature = reading.temperature if reading else state.temperature
+        device = self._devices[address]
+        limit = device.limits_from(self.cfg.limits).cold_below
+        text = t(state.reason, name=self._name(device), temperature=f"{temperature:.1f}", limit=f"{limit:g}")
         if first:
             log.warning(text)
             self._notes.append(text)

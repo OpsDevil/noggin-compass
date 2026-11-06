@@ -119,15 +119,15 @@ thermometers:
     alarm: true             # false: cold gives a tip, without the alarm
 
   # The cold alarm, for a window or a door left open at night. Below cold_below: a beep on this
-  # computer every quiet_every_seconds and one Telegram message. Not warmer after check_minutes:
-  # the alarm, a siren with no pause and a Telegram message with an Off button every
-  # repeat_minutes. Off silences it for snooze_minutes; then it comes back unless it got warmer.
+  # computer every quiet_every_seconds and one Telegram message. The first reading check_minutes
+  # later or after still below cold_below: the alarm, a siren with no pause and a Telegram message
+  # with an Off button every repeat_minutes. Off silences it for snooze_minutes; then the first
+  # reading still below brings it back.
+  # A reading at cold_below or above ends it all.
   cold:
     check_minutes: 10
     repeat_minutes: 1
     snooze_minutes: 20
-    warming_degrees: 0.3    # "warmer" means up by this much; the readings wobble by about 0.1 °C
-    colder_degrees: 1.0     # falling this much below where it began starts the alarm at once
     every_minutes: 2        # read this often while it is colder than cold_below + close_degrees
     close_degrees: 1.0
     mute_hours: 2           # /mute in Telegram mutes the cold alarm this long by default

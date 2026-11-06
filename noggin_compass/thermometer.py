@@ -278,9 +278,7 @@ class ThermometerPoller:
 
     async def _poll(self, storage) -> None:
         while not self._stop.is_set():
-            started = datetime.now()
             await self._read_all(storage)
-            self._tell("polled", started)
             minutes = self.every_minutes if self.watch is None else self.watch.poll_minutes()
             # Wait in short steps so that stop() is noticed.
             for _ in range(int(minutes * 60)):

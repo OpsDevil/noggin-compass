@@ -59,20 +59,22 @@ class Night:
         return texts
 
 
-def test_cold_starts_quietly_and_the_alarm_comes_when_it_does_not_get_warmer():
+def test_cold_starts_quietly_and_the_alarm_comes_when_still_below_the_limit():
     night = Night()
     assert night.read(21.0) is None and night.take() == []
     assert night.watch.poll_minutes() == 10
     assert night.read(17.8) == "quiet"
     assert night.take() == ["Crib: 17.8 °C, colder than 18 °C. Check the windows and the door. "
-                            "If it is not warmer in 10 min, the alarm goes off."]
+                            "I will check again in 10 min: if it is still below 18 °C, the alarm goes off."]
     assert night.watch.poll_minutes() == 2  # follows the temperature closely now
     night.clock.wait(4)
     assert night.read(17.6) == "quiet"
     night.clock.wait(6)
-    assert night.read(17.7) == "alarm"  # 10 min and not warmer
+    assert night.watch.tick() == "quiet"  # 10 min are up, but no new reading yet: nothing decided
+    night.clock.wait(1)
+    assert night.read(17.7) == "alarm"  # the new reading decides
     [(alarm, silent)] = night.sent
-    assert not silent and alarm.text.startswith("Alarm, it is cold! Crib: 17.7 °C")
+    assert not silent and alarm.text.startswith("Alarm, it is cold! Crib: 17.7 °C, below 18 °C.")
     assert alarm.buttons == [[("Turn off", OFF)], [("Mute for 2 h", "climate:mute:2")]]
     assert night.notes == [alarm.text]  # and a notification on the computer, once
 
@@ -81,45 +83,42 @@ def test_the_alarm_repeats_until_it_is_turned_off_and_comes_back_if_still_cold()
     night = Night()
     night.read(17.5)
     night.clock.wait(10)
-    night.read(17.4)
+    assert night.read(17.4) == "alarm"
     night.take()
     night.clock.wait(0.5)
     assert night.watch.tick() == "alarm" and night.take() == []
     night.clock.wait(0.5)
     assert night.watch.tick() == "alarm" and len(night.take()) == 1  # every repeat_minutes, 1 by default
     answer = night.watch.press(OFF)
-    assert answer.text == "The alarm is off. If it is not warmer in 20 min, it goes off again." and not answer.buttons
+    assert answer.text == "The alarm is off. I will check again in 20 min: if it is still cold, it goes off again." and not answer.buttons
     assert night.watch.tick() is None  # silent at once
     night.clock.wait(10)
-    assert night.read(17.5) is None
+    assert night.read(17.9) is None  # warmer, but still below 18: changes nothing
     night.clock.wait(10)
-    assert night.read(17.5) == "alarm"
-    assert night.take()[0].startswith("Alarm again! Crib: 17.5 °C, not warmer 20 min after it was turned off.")
+    assert night.watch.tick() is None  # waits for a new reading
+    assert night.read(17.9) == "alarm"
+    assert night.take()[0].startswith("Alarm again! Crib: 17.9 °C, still below 18 °C.")
     assert night.watch.press(OFF).text.startswith("The alarm is off")
     assert night.watch.press(OFF).text.startswith("The alarm is off")  # a second phone: still fine
 
 
-def test_getting_warmer_by_itself_keeps_it_quiet_and_warm_again_ends_it():
+def test_only_the_limit_counts():
     night = Night()
-    night.read(17.0)
-    night.clock.wait(10)
-    assert night.read(17.4) == "quiet"  # warmer by 0.4: someone closed the window, give it time
-    night.clock.wait(10)
+    night.read(15.0)  # a sharp fall
+    night.clock.wait(3)
+    assert night.read(15.3) == "quiet"  # a little warmer: still cold, nothing changes
+    night.clock.wait(6)
     assert night.read(17.9) == "quiet"
-    night.clock.wait(2)
-    assert night.read(18.1) == "quiet"  # above 18, but by less than warming_degrees: not yet
+    night.clock.wait(1)
+    assert night.read(17.9) == "alarm"  # 10 min and still below 18, however it moved meanwhile
     night.take()
-    assert night.read(18.4) is None
-    assert night.take() == ["Crib: warmer again, 18.4 °C."]
+    assert night.read(18.0) is None  # at the limit: not cold
+    assert night.take() == ["Crib: 18.0 °C, no longer cold. The alarm is over."]
+    assert night.read(17.9) == "quiet"  # below again: from the start
+    assert night.take()[0].startswith("Crib: 17.9 °C, colder than 18 °C.")
+    assert night.read(18.0) is None
+    assert night.take() == ["Crib: 18.0 °C, no longer cold."]
     assert night.sent == [] and night.watch.poll_minutes() == 2  # still close to the limit
-
-
-def test_a_fast_fall_starts_the_alarm_at_once():
-    night = Night()
-    night.read(17.9)
-    night.clock.wait(2)
-    assert night.read(16.8) == "alarm"
-    assert night.texts()[-1].startswith("Alarm, it is getting cold fast! Crib: 16.8 °C")
 
 
 def test_the_alarm_ends_when_warm_even_after_off():
@@ -131,14 +130,14 @@ def test_the_alarm_ends_when_warm_even_after_off():
     night.take()
     night.clock.wait(5)
     assert night.read(18.5) is None
-    assert night.take() == ["Crib: warmer again, 18.5 °C. The alarm is over."]
+    assert night.take() == ["Crib: 18.5 °C, no longer cold. The alarm is over."]
     assert night.watch.status_lines() == []
 
 
 def test_now_says_what_the_alarm_is_doing():
     night = Night()
     night.read(17.0)
-    assert night.watch.status_lines() == ["Crib: colder than it should be. If it does not get warmer, the alarm goes off."]
+    assert night.watch.status_lines() == ["Crib: colder than 18 °C. If it stays below, the alarm goes off."]
     night.clock.wait(10)
     night.read(17.0)
     assert night.watch.status_lines() == ["Crib: cold alarm on."]
@@ -346,49 +345,26 @@ def test_telegram_can_send_without_a_sound():
     assert calls[0]["disable_notification"] == "true" and "disable_notification" not in calls[1]
 
 
-def test_a_thermometer_silent_in_the_cold_raises_the_alarm():
+def test_without_a_new_reading_nothing_is_decided():
     night = Night()
     night.read(17.5)
     night.take()
-    night.clock.wait(10)
-    night.watch.polled(night.clock() - timedelta(minutes=1))  # began before the decision was due
+    night.clock.wait(60)  # the thermometer is silent
     assert night.watch.tick() == "quiet"
-    night.clock.wait(3)
-    night.watch.polled(night.clock() - timedelta(minutes=1))  # began after it, and nothing came
-    assert night.watch.tick() == "alarm"
-    assert night.take()[0].startswith("Alarm! Crib was 17.5 °C and has stopped answering")
+    assert night.take() == []
 
 
-def test_a_reading_that_comes_in_time_decides_instead():
-    night = Night()
-    night.read(17.5)
-    night.clock.wait(11)
-    night.read(17.6)  # not warmer: the plain alarm, not "stopped answering"
-    night.watch.polled(night.clock() - timedelta(seconds=30))
-    assert night.watch.tick() == "alarm"
-    assert night.take()[-1].startswith("Alarm, it is cold! Crib: 17.6 °C")
-
-
-def test_without_finished_polls_a_silent_thermometer_still_raises_the_alarm():
-    night = Night()  # Bluetooth hangs: no poll ever finishes
-    night.read(17.5)
-    night.clock.wait(10 + 3 * 3.5 - 1)
-    assert night.watch.tick() == "quiet"
-    night.clock.wait(1)
-    assert night.watch.tick() == "alarm"
-
-
-def test_after_off_a_silent_thermometer_brings_the_alarm_back():
+def test_after_off_the_first_cold_reading_brings_the_alarm_back():
     night = Night()
     night.read(17.5)
     night.clock.wait(10)
     night.read(17.5)
     night.watch.press(OFF)
     night.clock.wait(19)
-    night.read(17.6)  # answered during the snooze: not enough, the decision is at 20 min
+    assert night.read(17.6) is None  # before the 20 min: still off
     night.clock.wait(3)
-    night.watch.polled(night.clock() - timedelta(minutes=1))
-    assert night.watch.tick() == "alarm"
+    assert night.watch.tick() is None  # 20 min are up, no new reading yet
+    assert night.read(17.6) == "alarm"
 
 
 def test_one_failed_message_does_not_stop_the_others():

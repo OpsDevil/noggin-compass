@@ -188,19 +188,14 @@ class Thermometer:
 
 @dataclass
 class ColdAlarmConfig:
-    # When it gets colder than cold_below: first a beep on the computer every quiet_every_seconds
-    # and one Telegram message. If it is not warmer after check_minutes, the alarm: a siren with no
-    # pause and a Telegram message with an Off button every repeat_minutes. Meant to wake.
+    # Below cold_below: first a beep on the computer every quiet_every_seconds and one Telegram
+    # message. The first reading check_minutes later or after still below cold_below: the alarm, a siren with no pause and a
+    # Telegram message with an Off button every repeat_minutes. Meant to wake. At cold_below or
+    # above, it all ends.
     check_minutes: float = 10
     repeat_minutes: float = 1
-    # After Off the alarm is quiet this long, then comes back if it is not warmer.
+    # After Off the alarm is quiet this long, then the first reading still below cold_below brings it back.
     snooze_minutes: float = 20
-    # By this much the temperature has to rise to count as getting warmer, and to rise above
-    # cold_below to end it all: the thermometer's readings wobble by about 0.1 °C.
-    warming_degrees: float = 0.3
-    # Falling by this much since it began starts the alarm at once, without waiting check_minutes:
-    # a window opened wide in winter.
-    colder_degrees: float = 1.0
     # While it is colder than cold_below + close_degrees, read the thermometers every
     # every_minutes instead of thermometers.every_minutes, so the alarm follows the temperature.
     every_minutes: float = 2

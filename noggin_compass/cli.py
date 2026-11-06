@@ -18,14 +18,14 @@ from .head import HeadEstimate, Side, estimate_head, side_label
 from .i18n import LANGUAGES, set_language, t
 from .motion import MotionMeter
 from .naps import periods as nap_periods
-from .notify import SLEEP_LOOKBACK, Notifier, load_history, mac_notification, monitor_from_config, sleep_line
+from .notify import Notifier, load_history, mac_notification, monitor_from_config
 from .pose import Person, PoseDetector
-from .preview import draw, fit
+from .preview import Frame, corner_notes, fit, picture
 from .report import build_report, day_bounds, day_of, fmt_duration, parse_day_start, render
-from .sleep import render_sleep, sleep_days
+from .sleep import SLEEP_LOOKBACK, render_sleep, sleep_days, sleep_line
 from .source import open_source, preprocess
 from .storage import Storage
-from .thermometer import ThermometerPoller, climate_lines, menu
+from .thermometer import ThermometerPoller, menu
 from .tracker import SideTracker
 
 if TYPE_CHECKING:
@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 log = logging.getLogger("noggin_compass")
 
 STATUS_EVERY_SECONDS = 60
-SLEEP_EVERY_SECONDS = 60  # how often the preview works out whether the baby is asleep
+SLEEP_EVERY_SECONDS = 60  # how often to work out whether the baby is asleep, for the picture
 PREVIEW_WINDOW = "noggin-compass"
 
 
@@ -72,24 +72,22 @@ def analyze(
 
 
 def save_snapshot(
-    frame: np.ndarray,
-    ts: datetime,
-    estimate: HeadEstimate,
-    person: Person | None,
+    shot: Frame,
     root: str,
     detector: DetectorConfig,
     motion: float | None = None,
     presence: float | None = None,
 ) -> None:
     """Save the clean frame (to review it or fine-tune the model later) and a line in
-    analysis.jsonl with everything that was detected. The jsonl is enough to recompute stats and
-    tune settings without running the model again, and `draw` puts the detected points on a saved
-    frame when someone wants to look, so a drawn copy is not kept."""
+    analysis.jsonl with everything that was detected and the corner notes. The jsonl is enough to
+    recompute stats and tune settings without running the model again, and `draw` makes the same
+    picture as the preview from it when someone wants to look, so a drawn copy is not kept."""
+    ts, estimate, person = shot.time, shot.estimate, shot.person
     folder = Path(root) / f"{ts:%Y-%m-%d}"
     folder.mkdir(parents=True, exist_ok=True)
     score = f"{estimate.score:+.2f}" if estimate.score is not None else "na"
     name = f"{ts:%H%M%S}_{estimate.side.value}_{score}"
-    cv2.imwrite(str(folder / f"{name}.jpg"), frame)
+    cv2.imwrite(str(folder / f"{name}.jpg"), shot.image)
     record = {
         "time": ts.isoformat(timespec="seconds"),
         "file": f"{name}.jpg",
@@ -110,9 +108,11 @@ def save_snapshot(
             [round(float(x), 1), round(float(y), 1), round(float(c), 3)]
             for (x, y), c in zip(person.xy, person.conf)
         ],
+        # The lines in the picture's corner then: asleep or not, the thermometers.
+        "notes": shot.notes,
     }
     with open(folder / "analysis.jsonl", "a", encoding="utf-8") as out:
-        out.write(json.dumps(record) + "\n")
+        out.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
 def run(cfg: Config, args: argparse.Namespace) -> None:
@@ -176,7 +176,13 @@ def run(cfg: Config, args: argparse.Namespace) -> None:
             if alert is not None:
                 notifier.alert(alert)
             notifier.update(ts, current, monitor)
-            notifier.set_frame(frame, person, estimate, ts)
+            if now - last_sleep >= SLEEP_EVERY_SECONDS:
+                last_sleep = now
+                asleep_note = None if current.side == Side.ABSENT else sleep_line(
+                    storage.activity(ts - SLEEP_LOOKBACK, ts), cfg.sleep, ts)
+            readings = {} if thermometers is None else thermometers.latest
+            shot = Frame(frame, person, estimate, ts, corner_notes(asleep_note, cfg, readings, datetime.now()))
+            notifier.set_frame(shot)
 
             if now - last_status >= STATUS_EVERY_SECONDS:
                 last_status = now
@@ -191,19 +197,10 @@ def run(cfg: Config, args: argparse.Namespace) -> None:
             )
             if snapshot_due:
                 last_snapshot = now
-                save_snapshot(frame, ts, estimate, person, cfg.storage.snapshots_dir, cfg.detector, motion,
+                save_snapshot(shot, cfg.storage.snapshots_dir, cfg.detector, motion,
                               presence.last_score if presence else None)
             if args.preview:
-                if now - last_sleep >= SLEEP_EVERY_SECONDS:
-                    last_sleep = now
-                    asleep_note = None if current.side == Side.ABSENT else sleep_line(
-                        storage.activity(ts - SLEEP_LOOKBACK, ts), cfg.sleep, ts)
-                notes = [asleep_note] if asleep_note else []
-                if thermometers is not None:
-                    notes += climate_lines(cfg.thermometers.devices, thermometers.latest, datetime.now(),
-                                           cfg.thermometers.every_minutes, cfg.thermometers.low_battery_volts)
-                debug = draw(frame, person, estimate, cfg.detector.min_keypoint_conf, cfg.head.mirrored, notes)
-                cv2.imshow(PREVIEW_WINDOW, fit(debug))
+                cv2.imshow(PREVIEW_WINDOW, fit(picture(shot, cfg)))
                 if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
                     break
     except KeyboardInterrupt:
@@ -261,8 +258,8 @@ def report(cfg: Config, args: argparse.Namespace) -> None:
             print(t("cli.chart_saved", path=args.chart))
 
 
-def load_snapshot(path: Path, cfg: Config) -> tuple[np.ndarray, HeadEstimate, Person | None]:
-    """A saved frame and what was detected on it, from the analysis.jsonl next to it."""
+def load_snapshot(path: Path, cfg: Config) -> Frame:
+    """A saved frame and what was made of it, from the analysis.jsonl next to it."""
     frame = cv2.imread(str(path))
     if frame is None:
         raise SystemExit(t("cli.draw.unreadable", path=path))
@@ -275,30 +272,30 @@ def load_snapshot(path: Path, cfg: Config) -> tuple[np.ndarray, HeadEstimate, Pe
         raise SystemExit(t("cli.draw.no_record", path=path))
     method, _, axis_source = record["method"].partition("/")
     estimate = HeadEstimate(Side(record["side"]), record["score"], method, axis_source)
+    shot = Frame(frame, None, estimate, datetime.fromisoformat(record["time"]), record.get("notes") or [])
     if not record["keypoints"]:
-        return frame, estimate, None
+        return shot
     points = np.array(record["keypoints"], dtype=float)
-    person = Person(np.array(record["box"], dtype=float), 0.0, points[:, :2], points[:, 2])
+    shot.person = Person(np.array(record["box"], dtype=float), 0.0, points[:, :2], points[:, 2])
     if record.get("axis"):
         estimate.axis = tuple(record["axis"])
-        return frame, estimate, person
+        return shot
     # Snapshots saved before the axis was stored: recompute it. Without the first pass axis, on a
     # frame without shoulders the arrow follows head.fallback_head_direction.
     estimate.axis = estimate_head(
-        person.xy,
-        person.conf,
+        shot.person.xy,
+        shot.person.conf,
         min_conf=cfg.detector.min_keypoint_conf,
         center_threshold=cfg.head.center_threshold,
         mirrored=cfg.head.mirrored,
         fallback_head_direction=cfg.head.fallback_head_direction,
     ).axis
-    return frame, estimate, person
+    return shot
 
 
 def draw_snapshots(cfg: Config, args: argparse.Namespace) -> None:
     for path in args.snapshots:
-        frame, estimate, person = load_snapshot(path, cfg)
-        image = draw(frame, person, estimate, cfg.detector.min_keypoint_conf, cfg.head.mirrored)
+        image = picture(load_snapshot(path, cfg), cfg)
         folder = args.out or path.parent
         folder.mkdir(parents=True, exist_ok=True)
         out = folder / f"{path.stem}_drawn.jpg"

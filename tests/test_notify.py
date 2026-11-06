@@ -3,6 +3,7 @@ import json
 import urllib.parse
 from datetime import datetime, timedelta
 
+import cv2
 import numpy as np
 import pytest
 
@@ -11,6 +12,7 @@ from noggin_compass.balance import Alert
 from noggin_compass.config import Config
 from noggin_compass.head import HeadEstimate, Side
 from noggin_compass.i18n import set_language
+from noggin_compass.preview import Frame, picture
 from noggin_compass.storage import Storage
 from noggin_compass.telegram import Photo
 from noggin_compass.tracker import Segment
@@ -161,12 +163,29 @@ def test_photo_commands(tmp_path):
     cfg.telegram.photos = True
     assert "No data" in notifier.handle_command("/photo")
     image = np.full((200, 300, 3), 120, dtype=np.uint8)
-    notifier.set_frame(image, None, HeadEstimate(Side.LEFT, 0.62), T0)
+    notes = ["Asleep for 40 min, since 21:20.", "Temperature 21.0 °C, humidity 50%."]
+    frame = Frame(image, None, HeadEstimate(Side.LEFT, 0.62), T0, notes)
+    notifier.set_frame(frame)
     for command in ("/photo", "/marked"):
         photo = notifier.handle_command(command)
         assert isinstance(photo, Photo)
         assert photo.image[:2] == b"\xff\xd8"
         assert photo.caption == "22:00:00, head turned left (score +0.62)"
+
+
+def test_marked_is_the_preview_picture_with_its_notes():
+    cfg = Config()
+    cfg.telegram.photos = True
+    image = np.full((600, 900, 3), 120, dtype=np.uint8)
+    frame = Frame(image, None, HeadEstimate(Side.LEFT, 0.62), T0, ["Asleep for 40 min, since 21:20."])
+    notifier = notify.Notifier(cfg)
+    notifier.set_frame(frame)
+    sent = cv2.imdecode(np.frombuffer(notifier.handle_command("/marked").image, np.uint8), cv2.IMREAD_COLOR)
+    preview = picture(frame, cfg)
+    assert sent.shape == preview.shape
+    assert np.abs(sent.astype(int) - preview.astype(int)).mean() < 3  # the same picture, but for JPEG
+    bare = picture(Frame(image, None, HeadEstimate(Side.LEFT, 0.62), T0), cfg)
+    assert (bare[-80:, :400] != preview[-80:, :400]).any()  # the note is in the bottom left corner
 
 
 def test_bot_sends_photo_as_multipart():

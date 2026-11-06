@@ -1,18 +1,26 @@
-"""Debug image: which keypoints the model found, how confident it is, and what the program made
-of them. The head is small in the frame, so it is also shown enlarged in the corner."""
+"""The picture of an analysed frame: which keypoints the model found, how confident it is, what
+the program made of them, and lines in the corner (asleep or not, the thermometers). The head is
+small in the frame, so it is also shown enlarged in the corner.
+
+Every picture the program shows comes from `picture`: the preview window, /marked in Telegram,
+`noggin-compass draw` and the README picture. Nothing else calls `draw`, so they cannot differ."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass, field
+from datetime import datetime
 from functools import cache
 
 import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+from .config import Config
 from .head import HeadEstimate, Side, side_label
 from .i18n import t
 from .pose import Person
+from .thermometer import Reading, climate_lines
 
 FACE = range(5)
 _FONTS = ["/System/Library/Fonts/Supplemental/Arial.ttf", "/System/Library/Fonts/Helvetica.ttc"]
@@ -147,9 +155,10 @@ def draw(
     size = round(20 * unit)
     _label(draw_, (12, 12), f"{side_label(estimate.side).upper()}{score}", size, color)
     _label(draw_, (12, 12 + size * 1.6), estimate.describe(), round(14 * unit), (230, 230, 230))
-    note_size = round(16 * unit)
+    # Small: they are for a glance, and must not cover the crib at the bottom of the frame.
+    note_size = round(11 * unit)
     for row, note in enumerate(reversed(notes)):
-        _label(draw_, (12, image.height - 12 - row * note_size * 1.6), note, note_size, (230, 230, 230), "lb")
+        _label(draw_, (12, image.height - 10 - row * note_size * 1.5), note, note_size, (230, 230, 230), "lb")
     return cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR)
 
 
@@ -158,3 +167,31 @@ def fit(image: np.ndarray, max_width: int = 1400) -> np.ndarray:
         return image
     scale = max_width / image.shape[1]
     return cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+
+
+@dataclass
+class Frame:
+    """An analysed frame and what was made of it: everything a picture is drawn from."""
+
+    image: np.ndarray
+    person: Person | None
+    estimate: HeadEstimate
+    time: datetime
+    notes: list[str] = field(default_factory=list)  # see corner_notes
+
+
+def corner_notes(asleep: str | None, cfg: Config, readings: dict[str, Reading], now: datetime) -> list[str]:
+    """The lines in the corner of the picture: asleep or not (sleep.sleep_line), then each
+    thermometer, as /now words them but without the battery."""
+    notes = [asleep] if asleep else []
+    thermometers = cfg.thermometers
+    if thermometers.devices:
+        notes += climate_lines(thermometers.devices, readings, now, thermometers.every_minutes,
+                               thermometers.low_battery_volts)
+    return notes
+
+
+def picture(frame: Frame, cfg: Config) -> np.ndarray:
+    """The picture of an analysed frame, the same wherever it is shown."""
+    return draw(frame.image, frame.person, frame.estimate, cfg.detector.min_keypoint_conf, cfg.head.mirrored,
+                frame.notes)

@@ -15,15 +15,15 @@ import numpy as np
 
 from .balance import Alert, BalanceMonitor
 from .chart import render_chart
-from .config import Config, SleepConfig
+from .config import Config
 from .head import HeadEstimate, Side, side_label
 from .i18n import t
 from .report import build_report, day_bounds, day_of, fmt_duration, parse_day_start, reclassify, summarize
 from .naps import NapBook
 from .naps import periods as nap_periods
-from .sleep import find_sleep, no_sleep_text, period_lines, sleep_state, with_naps
+from .sleep import SLEEP_LOOKBACK, find_sleep, no_sleep_text, period_lines, sleep_line, with_naps
 from .pose import Person
-from .preview import draw, fit
+from .preview import Frame, fit, picture
 from .storage import Storage
 from .telegram import Photo, Reply, TelegramBot, resolve_credentials
 from .thermometer import climate_lines, tip_lines
@@ -37,8 +37,6 @@ SYSTEM_SOUNDS = Path("/System/Library/Sounds")
 RECENT_WINDOW = timedelta(hours=24)
 # Days on the chart's "left and right per day" panel.
 CHART_DAYS = 7
-# How far back sleep is looked for, to see a sleep that began before the period asked about.
-SLEEP_LOOKBACK = timedelta(hours=12)
 SOUND_REPEATS = 3
 
 
@@ -73,14 +71,6 @@ def mac_notification(text: str) -> None:
         pass
 
 
-def sleep_line(activity: list, cfg: SleepConfig, now: datetime) -> str | None:
-    """Asleep since when, or awake; None without recent movement data."""
-    asleep, period = sleep_state(activity, cfg, now)
-    if asleep:
-        return t("bot.now_asleep", duration=fmt_duration(period.seconds), since=f"{period.start:%H:%M}")
-    return None if asleep is None else t("bot.now_awake")
-
-
 def format_alert(alert: Alert, window_hours: float) -> str:
     if alert.reason == "stint":
         return t(
@@ -108,16 +98,6 @@ class Status:
     stint: float = 0.0
     totals: dict[Side, float] = field(default_factory=dict)
     due: Alert | None = None
-
-
-@dataclass
-class Frame:
-    """The latest analysed frame, for /photo and /marked."""
-
-    image: np.ndarray
-    person: Person | None
-    estimate: HeadEstimate
-    time: datetime
 
 
 class Notifier:
@@ -167,8 +147,8 @@ class Notifier:
             now, current, monitor.stint(now, current), monitor.totals(now, current), monitor.due(now, current)
         )
 
-    def set_frame(self, image: np.ndarray, person: Person | None, estimate: HeadEstimate, time: datetime) -> None:
-        self.frame = Frame(image, person, estimate, time)
+    def set_frame(self, frame: Frame) -> None:
+        self.frame = frame
 
     def alert(self, alert: Alert) -> None:
         text = format_alert(alert, self.cfg.alerts.window_hours)
@@ -203,9 +183,7 @@ class Notifier:
         frame = self.frame
         if frame is None:
             return t("bot.no_data")
-        image = frame.image
-        if marked:
-            image = draw(image, frame.person, frame.estimate, self.cfg.detector.min_keypoint_conf, self.cfg.head.mirrored)
+        image = picture(frame, self.cfg) if marked else frame.image
         ok, jpeg = cv2.imencode(".jpg", fit(image, 1600), [cv2.IMWRITE_JPEG_QUALITY, 85])
         if not ok:
             return t("bot.no_data")

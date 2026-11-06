@@ -241,3 +241,16 @@ def sleep_state(
     if periods and periods[-1].ongoing and now - periods[-1].end <= 2 * MINUTE:
         return True, periods[-1]
     return False, None
+
+
+# How far back sleep is looked for, to see a sleep that began before the period asked about.
+SLEEP_LOOKBACK = timedelta(hours=12)
+
+
+def sleep_line(samples: list[tuple[datetime, Side, float | None]], cfg: SleepConfig, now: datetime) -> str | None:
+    """"Asleep for ..., since ..." or "Not asleep", as /now and the picture show it; None without
+    recent movement data."""
+    asleep, period = sleep_state(samples, cfg, now)
+    if asleep:
+        return t("bot.now_asleep", duration=fmt_duration(period.seconds), since=f"{period.start:%H:%M}")
+    return None if asleep is None else t("bot.now_awake")

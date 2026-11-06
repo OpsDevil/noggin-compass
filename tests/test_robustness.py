@@ -275,3 +275,26 @@ def test_a_side_is_not_guessed_from_face_points_the_second_pass_could_not_check(
     assert checked.side != Side.UNKNOWN and checked.code.startswith("ear_and_eyes")
     estimate, person = analyze(Detector(False), frame, cfg, 0.0)
     assert estimate.side == Side.UNKNOWN and estimate.code == "unchecked" and person is not None
+
+
+
+def test_mute_and_unmute_from_telegram(tmp_path):
+    from noggin_compass.climate import ClimateWatch
+
+    cfg = Config()
+    cfg.storage.db_path = str(tmp_path / "db.sqlite")
+    assert "/mute" not in notify.Notifier(cfg).help_text()  # no thermometers: nothing to mute
+    assert notify.Notifier(cfg).handle_command("/mute") == "No thermometers are chosen, so there is no cold alarm to mute."
+    cfg.thermometers.devices = [Thermometer("5E1A7C30-9B2D-4F86-A1C4-3D7E9F2B6A18", "Crib")]
+    notifier = notify.Notifier(cfg)
+    help_text = notifier.help_text()
+    assert "/mute - mute the cold alarm for a while, 2 h unless you give the hours" in help_text
+    assert "/unmute - turn the cold alarm back on" in help_text
+    now = datetime(2026, 11, 6, 14, 0)
+    notifier.climate = ClimateWatch(cfg.thermometers, clock=lambda: now)
+    assert notifier.handle_command("/mute").text.startswith("The cold alarm is muted until 16:00")
+    assert notifier.handle_command("/mute 1,5").text.startswith("The cold alarm is muted until 15:30")
+    assert notifier.handle_command("/mute later") == "Give the hours as a number from 0 to 24, for example /mute 3."
+    assert notifier.handle_command("/mute 30") == "Give the hours as a number from 0 to 24, for example /mute 3."
+    assert notifier.press("climate:mute:4").text.startswith("The cold alarm is muted until 18:00")
+    assert notifier.handle_command("/unmute").text == "The cold alarm is on."

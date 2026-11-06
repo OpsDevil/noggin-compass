@@ -72,7 +72,7 @@ def test_cold_starts_quietly_and_the_alarm_comes_when_it_does_not_get_warmer():
     assert night.read(17.7) == "alarm"  # 10 min and not warmer
     [(alarm, silent)] = night.sent
     assert not silent and alarm.text.startswith("Alarm, it is cold! Crib: 17.7 °C")
-    assert alarm.buttons == [[("Turn off", OFF)]]
+    assert alarm.buttons == [[("Turn off", OFF)], [("Mute for 2 h", "climate:mute:2")]]
     assert night.notes == [alarm.text]  # and a notification on the computer, once
 
 
@@ -378,7 +378,7 @@ def test_one_failed_message_does_not_stop_the_others():
     night.read(17.5)
     night.clock.wait(10)
     assert night.read(17.5) == "alarm"
-    assert [text.text for text in sent if isinstance(text, Reply)][0].startswith("Alarm, it is cold!")
+    assert any(text.text.startswith("Alarm, it is cold!") for text in sent if isinstance(text, Reply))
 
 
 def test_messages_go_out_from_their_own_thread():
@@ -449,3 +449,35 @@ def test_one_search_reads_each_as_seen_and_one_seen_late_still_gets_read(monkeyp
     assert [address for address, _ in results] == [ROOM, CRIB, "AAAA"]
     assert isinstance(results[0][1], Reading) and isinstance(results[1][1], Reading)
     assert isinstance(results[2][1], LookupError)
+
+
+def test_mute_stops_the_cold_alarm_for_hours_and_it_starts_over_after():
+    night = Night()
+    night.read(17.5)
+    night.clock.wait(10)
+    assert night.read(17.5) == "alarm"
+    night.take()
+    answer = night.watch.press("climate:mute:2")  # the button under the alarm
+    assert answer.text.startswith("The cold alarm is muted until 04:10")
+    assert [label for label, _ in answer.buttons[0]] == ["1 h", "2 h", "3 h", "4 h"]
+    assert answer.buttons[1] == [("Turn it on", "climate:unmute")]
+    assert night.watch.tick() is None  # silent at once
+    night.clock.wait(30)
+    assert night.read(16.0) is None and night.take() == []  # the window is open: nothing
+    assert night.watch.status_lines() == ["The cold alarm is muted until 04:10."]
+    assert night.watch.poll_minutes() == 10  # no need to follow it closely meanwhile
+    night.clock.wait(90)
+    assert night.watch.tick() is None
+    assert night.take() == ["The cold alarm is on again."]
+    assert night.read(17.0) == "quiet"  # still cold: from the start, quietly
+    assert night.take()[0].startswith("Crib: 17.0 °C, colder than 18 °C.")
+
+
+def test_unmute_brings_the_cold_alarm_back_at_once():
+    night = Night()
+    night.watch.mute(2)
+    night.read(17.0)
+    assert night.take() == []
+    answer = night.watch.press("climate:unmute")
+    assert answer.text == "The cold alarm is on." and answer.buttons == [[("Mute for 2 h", "climate:mute:2")]]
+    assert night.read(17.0) == "quiet"

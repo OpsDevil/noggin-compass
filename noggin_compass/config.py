@@ -205,6 +205,9 @@ class ColdAlarmConfig:
     # every_minutes instead of thermometers.every_minutes, so the alarm follows the temperature.
     every_minutes: float = 2
     close_degrees: float = 1.0
+    # /mute in Telegram (or the button under a cold message) mutes the cold alarm for this many
+    # hours unless told otherwise: for a walk, or while the room is aired. /unmute ends it.
+    mute_hours: float = 2
     # How often the quiet beep sounds before the alarm.
     quiet_every_seconds: float = 60
     # macOS system sounds (Tink, Sosumi, Funk...) or sound files, with volume 0..1.
@@ -309,6 +312,7 @@ POSITIVE = (
     "thermometers.cold.snooze_minutes",
     "thermometers.cold.every_minutes",
     "thermometers.cold.quiet_every_seconds",
+    "thermometers.cold.mute_hours",
 )
 
 

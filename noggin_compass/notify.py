@@ -44,6 +44,7 @@ CAMERA_CHECK_SECONDS = 15
 # The bot's commands, in the order of its menu and of its help.
 COMMANDS = ("now", "stats", "sleep", "nap", "naps", "chart")
 PHOTO_COMMANDS = ("photo", "marked")
+COLD_COMMANDS = ("mute", "unmute")  # only with thermometers: there is no cold alarm without them
 
 
 def window_text() -> str:
@@ -189,7 +190,8 @@ class Notifier:
         # The wall clock, not the last frame's time: with the camera silent, "the last 24 hours"
         # still end now, and /now can tell that its news is old.
         self.clock = datetime.now
-        self.commands = COMMANDS + (PHOTO_COMMANDS if cfg.telegram.photos else ())
+        self.commands = (COMMANDS + (COLD_COMMANDS if cfg.thermometers.devices else ())
+                         + (PHOTO_COMMANDS if cfg.telegram.photos else ()))
         self._camera_silent = False
         self._camera_lock = threading.Lock()
         self._stopped = threading.Event()
@@ -202,9 +204,8 @@ class Notifier:
             else None
         )
 
-    @staticmethod
-    def _describe(command: str) -> str:
-        return t(f"bot.cmd.{command}", window=window_text())
+    def _describe(self, command: str) -> str:
+        return t(f"bot.cmd.{command}", window=window_text(), hours=f"{self.cfg.thermometers.cold.mute_hours:g}")
 
     def help_text(self) -> str:
         """Made from the same list as the bot's menu, so it never offers a command that is off."""
@@ -300,9 +301,29 @@ class Notifier:
             return self.naps.list()
         if command == "/chart":
             return self.chart()
+        if command in ("/mute", "/unmute"):
+            return self.mute(text) if command == "/mute" else self.unmute()
         if command in ("/photo", "/marked"):
             return self.photo(marked=command == "/marked")
         return self.help_text()
+
+    def mute(self, text: str) -> str | Reply:
+        """/mute [hours]: mute the cold alarm, for thermometers.cold.mute_hours unless told."""
+        if self.climate is None:
+            return t("bot.no_thermometers")
+        words = text.split()[1:]
+        hours = self.cfg.thermometers.cold.mute_hours
+        if words:
+            try:
+                hours = float(words[0].replace(",", "."))
+            except ValueError:
+                hours = -1.0
+        if not 0 < hours <= 24:
+            return t("climate.mute_bad")
+        return self.climate.mute(hours)
+
+    def unmute(self) -> str | Reply:
+        return t("bot.no_thermometers") if self.climate is None else self.climate.unmute()
 
     def photo(self, marked: bool) -> str | Photo:
         if not self.cfg.telegram.photos:

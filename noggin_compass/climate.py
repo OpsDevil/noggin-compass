@@ -25,6 +25,9 @@ from .thermometer import Reading, battery_percent, label, reading_text, stale, t
 log = logging.getLogger("noggin_compass")
 
 OFF = "climate:off"  # data of the Off button
+MUTE = "climate:mute:"  # + hours: data of the mute buttons
+UNMUTE = "climate:unmute"
+MUTE_CHOICES = (1, 2, 3, 4)  # hours offered as buttons
 # See ClimateWatch._check_silent.
 STUCK_POLLS = 3
 
@@ -68,6 +71,9 @@ class ClimateWatch:
         self._outbox: list[tuple[str | Reply, bool]] = []
         self._notes: list[str] = []  # for notify
         self._polled: datetime | None = None  # start of the last poll that finished
+        # Muted from Telegram until then (/mute): no cold alarm, no beeping. Only the cold alarm:
+        # "time to turn" and the silent camera are not about the room's temperature.
+        self._muted_until: datetime | None = None
         self._lock = threading.Lock()
 
     def readings(self) -> dict[str, Reading]:
@@ -102,7 +108,7 @@ class ClimateWatch:
             self._check_battery(device, reading, now)
             self._check_tips(device, reading, now)
             limits = device.limits_from(self.cfg.limits)
-            if limits.alarm:
+            if limits.alarm and not self._muted(now):
                 self._check_cold(device, reading.temperature, limits.cold_below, now)
         self._flush()
 
@@ -130,6 +136,8 @@ class ClimateWatch:
         """Read more often while it is cold or close to it, so the alarm follows the temperature."""
         cold = self.cfg.cold
         with self._lock:
+            if self._muted(self.clock()):
+                return self.cfg.every_minutes
             if self.cold:
                 return min(cold.every_minutes, self.cfg.every_minutes)
             for address, reading in self.latest.items():
@@ -147,6 +155,13 @@ class ClimateWatch:
         sound = None
         with self._lock:
             now = self.clock()
+            if self._muted_until is not None and now >= self._muted_until:
+                self._muted_until = None
+                log.info(t("climate.mute_over"))
+                self._say(t("climate.mute_over"), silent=True)
+            if self._muted(now):
+                self.cold.clear()
+                return None
             self._check_silent(now)
             repeat = timedelta(minutes=self.cfg.cold.repeat_minutes)
             for address, state in self.cold.items():
@@ -161,8 +176,42 @@ class ClimateWatch:
         self._flush()
         return sound
 
+    def mute(self, hours: float) -> Reply:
+        """Mute the cold alarm for `hours`: what is going on stops at once, and if it is still cold
+        when the time is up, it starts over from the quiet beep."""
+        with self._lock:
+            until = self.clock() + timedelta(hours=hours)
+            self._muted_until = until
+            self.cold.clear()
+        log.info(t("climate.mute_log", time=f"{until:%H:%M}"))
+        return self._mute_reply(until)
+
+    def unmute(self) -> Reply:
+        with self._lock:
+            self._muted_until = None
+        log.info(t("climate.unmute_log"))
+        return Reply(t("climate.unmuted"), [[(t("climate.btn_mute", hours=self._hours()), MUTE + self._hours())]])
+
+    def _mute_reply(self, until: datetime) -> Reply:
+        hours = [(t("climate.btn_hours", hours=n), f"{MUTE}{n}") for n in MUTE_CHOICES]
+        return Reply(t("climate.muted", time=f"{until:%H:%M}"), [hours, [(t("climate.btn_unmute"), UNMUTE)]])
+
+    def _hours(self) -> str:
+        return f"{self.cfg.cold.mute_hours:g}"
+
+    def _mute_button(self) -> list[tuple[str, str]]:
+        return [(t("climate.btn_mute", hours=self._hours()), MUTE + self._hours())]
+
     def press(self, data: str) -> Reply | None:
-        """The Off button under an alarm message."""
+        """The buttons under the cold messages and under /mute's answer."""
+        if data.startswith(MUTE):
+            try:
+                hours = float(data.removeprefix(MUTE))
+            except ValueError:
+                return None
+            return self.mute(hours)
+        if data == UNMUTE:
+            return self.unmute()
         if data != OFF:
             return None
         with self._lock:
@@ -180,9 +229,11 @@ class ClimateWatch:
         return Reply(t("climate.off", minutes=minutes) if ringing or silenced else t("climate.off_none"))
 
     def status_lines(self) -> list[str]:
-        """For /now: an alarm going on, or turned off for now."""
+        """For /now: an alarm going on, or turned off for now, or muted."""
         lines = []
         with self._lock:
+            if self._muted(self.clock()):
+                return [t("climate.now_muted", time=f"{self._muted_until:%H:%M}")]
             for address, state in self.cold.items():
                 name = self._name(self._devices[address])
                 if state.stage == "alarm":
@@ -196,6 +247,9 @@ class ClimateWatch:
 
     # Inside the lock.
 
+    def _muted(self, now: datetime) -> bool:
+        return self._muted_until is not None and now < self._muted_until
+
     def _check_cold(self, device: Thermometer, temperature: float, limit: float, now: datetime) -> None:
         cfg: ColdAlarmConfig = self.cfg.cold
         address = device.address
@@ -207,7 +261,8 @@ class ClimateWatch:
                 text = t("climate.cold", name=name, temperature=f"{temperature:.1f}", limit=f"{limit:g}",
                          minutes=f"{cfg.check_minutes:g}")
                 log.warning(text)
-                self._say(text, silent=False)
+                # Opened the window on purpose? One tap mutes it.
+                self._say(Reply(text, [self._mute_button()]), silent=False)
             return
         if temperature >= limit + cfg.warming_degrees:
             del self.cold[address]
@@ -263,7 +318,7 @@ class ClimateWatch:
         if first:
             log.warning(text)
             self._notes.append(text)
-        self._say(Reply(text, [[(t("climate.btn_off"), OFF)]]), silent=False)
+        self._say(Reply(text, [[(t("climate.btn_off"), OFF)], self._mute_button()]), silent=False)
 
     def _check_battery(self, device: Thermometer, reading: Reading, now: datetime) -> None:
         if reading.battery >= self.cfg.low_battery_volts:

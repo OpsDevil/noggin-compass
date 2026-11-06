@@ -43,6 +43,10 @@ class SleepPeriod:
     ongoing: bool = False
     # Entered by the parents, not seen by the camera.
     manual: bool = False
+    # A piece of a sleep cut at the start of a day: it began the day before.
+    continued: bool = False
+    # A piece of a sleep cut at the end of a day: it goes on into the next one.
+    goes_on: bool = False
 
     @property
     def seconds(self) -> float:
@@ -143,28 +147,41 @@ def find_sleep(samples: list[tuple[datetime, Side, float | None]], cfg: SleepCon
 
 
 def split_by_day(periods: list[SleepPeriod], day_start: time) -> dict[date, list[SleepPeriod]]:
+    """Each sleep cut at the day boundaries: a night from 23:00 to 07:00 is an hour in the first
+    day and 7 hours in the second. The pieces say they were cut, so a day counts the time it holds
+    and the falling asleep only where it happened."""
     days: dict[date, list[SleepPeriod]] = defaultdict(list)
     for period in periods:
         start = period.start
         while start < period.end:
             day = day_of(start, day_start)
             end = min(period.end, day_bounds(day, day_start)[1])
-            days[day].append(SleepPeriod(start, end, period.ongoing and end == period.end, period.manual))
+            days[day].append(SleepPeriod(start, end, period.ongoing and end == period.end, period.manual,
+                                         continued=start > period.start, goes_on=end < period.end))
             start = end
     return dict(days)
 
 
 @dataclass
 class SleepDay:
+    """A day's sleep: the pieces of the sleeps that fall into it (see split_by_day)."""
+
     day: date
     periods: list[SleepPeriod]
 
     @property
     def total(self) -> float:
+        """Time asleep within the day."""
         return sum(p.seconds for p in self.periods)
 
     @property
+    def count(self) -> int:
+        """Times the baby fell asleep that day: a sleep from the night before is not one of them."""
+        return sum(not p.continued for p in self.periods)
+
+    @property
     def longest(self) -> float:
+        """The longest stretch of sleep within the day."""
         return max((p.seconds for p in self.periods), default=0.0)
 
 
@@ -210,7 +227,13 @@ def period_lines(periods: list[SleepPeriod], now: datetime | None = None) -> lis
             end=f"{p.end:%H:%M}",
             duration=fmt_duration(p.seconds),
         )
-        lines.append(t("sleep.manual", line=line) if p.manual else line)
+        if p.manual:
+            line = t("sleep.manual", line=line)
+        if p.continued:
+            line = t("sleep.continued", line=line)
+        if p.goes_on:
+            line = t("sleep.goes_on", line=line)
+        lines.append(line)
     return lines
 
 
@@ -226,11 +249,11 @@ def render_sleep(
     if not days:
         return no_sleep_text(samples or [])
     weekdays = t("weekdays").split(",")
-    out = [t("sleep.title", start=f"{day_start:%H:%M}")]
+    out = [t("sleep.title_midnight") if day_start == time(0, 0) else t("sleep.title", start=f"{day_start:%H:%M}")]
     for d in days:
         out.append(
             f"{d.day:%d.%m} ({weekdays[d.day.weekday()]})  "
-            + t("sleep.day", total=fmt_duration(d.total), count=len(d.periods), longest=fmt_duration(d.longest))
+            + t("sleep.day", total=fmt_duration(d.total), count=d.count, longest=fmt_duration(d.longest))
         )
     for d in days[-detail_days:] if detail_days else []:
         out += ["", t("sleep.day_title", date=f"{d.day:%d.%m.%Y}")]

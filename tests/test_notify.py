@@ -214,7 +214,8 @@ def test_chart_command(tmp_path):
     notifier = notify.Notifier(cfg)
     notifier.status = notify.Status(time=T0 + timedelta(hours=1))
     notifier.clock = lambda: T0 + timedelta(hours=1)
-    assert notifier.handle_command("/chart") == "No data yet."
+    empty = notifier.handle_command("/chart")
+    assert empty.text == "No data yet." and empty.buttons  # the other days can still be picked
     storage = Storage(cfg.storage.db_path)
     for i in range(0, 3600, 5):
         side, score = (Side.LEFT, 0.8) if i < 1800 else (Side.RIGHT, -0.8)
@@ -223,6 +224,27 @@ def test_chart_command(tmp_path):
     chart = notifier.handle_command("/chart")
     assert isinstance(chart, Photo) and chart.image[:4] == b"\x89PNG"
     assert chart.filename == "chart.png"
+    # Buttons under it: the last 24 hours, today, yesterday and the days before.
+    labels = [label for row in chart.buttons for label, _ in row]
+    assert labels[:3] == ["Last 24 hours", "Today", "Yesterday"] and len(labels) == 8
+    assert ("Today", "chart:2026-11-04") in chart.buttons[0]
+    day = notifier.press("chart:2026-11-04")
+    assert isinstance(day, Photo) and day.buttons == chart.buttons
+    assert notifier.press("chart:2026-11-01").text == "No data for 01.11."
+    assert notifier.press("chart:garbage") is None
+
+
+def test_an_answer_to_a_button_under_a_picture_comes_as_a_new_message():
+    sent, photos, edits = [], [], []
+    bot = telegram.TelegramBot("token", [10], lambda text: None,
+                               on_button=lambda data: Photo(b"\x89PNG", "day") if data == "pic" else "text")
+    bot.call = lambda method, **params: edits.append(method)
+    bot.send = lambda text, chat_ids=None, silent=False: sent.append(text)
+    bot.send_photo = lambda chat, photo: photos.append(photo.caption) or True
+    picture_message = {"chat": {"id": 10}, "message_id": 5, "photo": [{}]}
+    bot.handle_updates([{"update_id": 1, "callback_query": {"id": "q", "data": "pic", "message": picture_message}},
+                        {"update_id": 2, "callback_query": {"id": "r", "data": "text", "message": picture_message}}])
+    assert photos == ["day"] and sent == ["text"] and "editMessageText" not in edits
 
 
 def test_command_menu_lists_photos_only_when_allowed():

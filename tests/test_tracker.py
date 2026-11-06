@@ -43,3 +43,18 @@ def test_gap_is_not_counted():
 def test_unknown_is_tracked_separately():
     segments = build_segments(series((L, 30), (U, 30), (L, 31)), 10, 60)
     assert summary(segments) == [(L, 30), (U, 30), (L, 30)]
+
+
+def test_a_head_turned_away_and_flickering_still_leaves_the_old_side():
+    # Left for a minute, then a little right: "straight" and "right" by turns, neither holding
+    # 10 s alone. Left must end, and right (seen most) take over from the first frame away.
+    C = Side.CENTER
+    flicker = [(R, 3), (C, 2)] * 12
+    segments = build_segments(series((L, 60), *flicker, (R, 1)), 10, 60)
+    assert summary(segments) == [(L, 60), (R, 60)]
+
+
+def test_equal_counts_go_to_the_latest_side():
+    C = Side.CENTER
+    segments = build_segments(series((L, 30), (C, 5), (R, 6)), 10, 60)
+    assert summary(segments)[1][0] == R

@@ -20,10 +20,16 @@ class Segment:
 
 
 class SideTracker:
-    """A side change counts only once the new position has held for confirm_seconds, so one or
-    two bad frames from the detector do not break a segment. The change is dated to the first
-    frame in the new position. If there are no frames for longer than gap_seconds, the segment
-    ends at the last frame and the gap is not counted anywhere."""
+    """A side change counts only once the head has been off the confirmed side for
+    confirm_seconds, so one or two bad frames from the detector do not break a segment. It then
+    goes to the side seen most in that time (the latest of equals), dated to its first frame.
+
+    Off the confirmed side means any other side, not one other side: a head turned from left to
+    a little right gives frames that flicker between "straight" and "right", and waiting for one of
+    them to hold alone would keep "left" confirmed, and growing, the whole time.
+
+    If there are no frames for longer than gap_seconds, the segment ends at the last frame and the
+    gap is not counted anywhere."""
 
     def __init__(self, confirm_seconds: float = 10.0, gap_seconds: float = 60.0):
         self.confirm_seconds = confirm_seconds
@@ -31,8 +37,8 @@ class SideTracker:
         self._side: Side | None = None
         self._start: datetime | None = None
         self._last: datetime | None = None
-        self._candidate: Side | None = None
-        self._candidate_since: datetime | None = None
+        self._away_since: datetime | None = None  # first frame off the confirmed side
+        self._away: dict[Side, tuple[int, int]] = {}  # side: (frames, index of the latest)
 
     @property
     def current(self) -> Segment | None:
@@ -48,20 +54,24 @@ class SideTracker:
         if self._side is None:
             self._side, self._start = side, ts
         elif side == self._side:
-            self._candidate = None
+            self._away_since, self._away = None, {}  # back: the change did not hold
         else:
-            if side != self._candidate:
-                self._candidate, self._candidate_since = side, ts
-            if (ts - self._candidate_since).total_seconds() >= self.confirm_seconds:
-                closed.append(Segment(self._side, self._start, self._candidate_since))
-                self._side, self._start = side, self._candidate_since
-                self._candidate = None
+            if self._away_since is None:
+                self._away_since = ts
+            frames, _ = self._away.get(side, (0, 0))
+            self._away[side] = (frames + 1, sum(n for n, _ in self._away.values()) + 1)
+            if (ts - self._away_since).total_seconds() >= self.confirm_seconds:
+                new = max(self._away, key=self._away.get)
+                closed.append(Segment(self._side, self._start, self._away_since))
+                self._side, self._start = new, self._away_since
+                self._away_since, self._away = None, {}
         self._last = ts
         return closed
 
     def finish(self) -> list[Segment]:
         segment = self.current
-        self._side = self._start = self._last = self._candidate = self._candidate_since = None
+        self._side = self._start = self._last = self._away_since = None
+        self._away = {}
         return [segment] if segment is not None else []
 
 

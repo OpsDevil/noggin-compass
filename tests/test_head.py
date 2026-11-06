@@ -121,3 +121,18 @@ def test_nose_and_eyes_only_gives_weak_estimate():
     result = estimate(xy, conf)
     assert result.side == Side.CENTER
     assert result.method == "nose_and_eyes"
+
+
+def test_one_ear_with_the_face_almost_in_line_is_not_a_confident_profile():
+    # Shoulders below, one ear above them, no eyes; the nose either well to the side of the ear
+    # (a profile) or almost straight above it, 2 px to the side (a turn in doubt).
+    def head(nose):
+        xy, conf = np.zeros((17, 2)), np.zeros(17)
+        xy[5], xy[6], xy[3], xy[0] = (300, 400), (340, 400), (320, 300), nose
+        conf[[0, 3, 5, 6]] = 0.9
+        return estimate(xy, conf)
+
+    profile = head((360, 300))
+    assert profile.method == "one_ear_profile" and profile.score == pytest.approx(1.0)
+    doubtful = head((322, 260))
+    assert doubtful.method == "one_ear_profile" and abs(doubtful.score) < 0.35

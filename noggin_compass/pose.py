@@ -30,6 +30,9 @@ class Person:
     # Unit vector shoulders -> head from the first pass, used for the head estimate when the
     # second pass does not see the shoulders.
     up: np.ndarray | None = None
+    # False when only the first pass found it, and its face points were not checked on the
+    # head-up crop: on a baby lying across the frame they are often confidently wrong.
+    checked: bool = True
 
 
 @dataclass
@@ -168,7 +171,7 @@ class PoseDetector:
         if fresh is not None and best is fresh and now is not None:
             self._memory = (now, first.box, up)
         if best is None and first is not None:
-            return replace(first, up=up)
+            return replace(first, up=up, checked=False)
         return best
 
     def _prefer_remembered(self, box: np.ndarray, fresh: Person, old: Person) -> bool:

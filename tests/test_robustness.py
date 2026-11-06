@@ -209,3 +209,69 @@ def test_draw_takes_the_last_record_of_a_file_and_skips_a_broken_line(tmp_path):
         out.write('{"file": "080000_absent_na.jpg", "si')  # the program stopped mid-line
     assert load_snapshot(tmp_path / "2026-11-06" / "080000_absent_na.jpg", Config()).notes == ["again"]
     assert len(analysis.read_text().splitlines()) == 3 and json.loads(analysis.read_text().splitlines()[0])
+
+
+# --- The camera going silent, a recorded video -----------------------------------------------------
+
+def test_telegram_hears_once_when_the_camera_goes_silent_and_once_when_it_is_back(tmp_path):
+    cfg = Config()
+    cfg.storage.db_path = str(tmp_path / "db.sqlite")
+    notifier = notify.Notifier(cfg)
+    sent, notes = [], []
+    notifier.send = lambda text, silent=False: sent.append((text, silent))
+    notifier.notify = notes.append
+    current = Segment(Side.LEFT, T0, T0 + timedelta(minutes=10))
+    notifier.status = notify.Status(time=current.end, current=current)
+    notifier.clock = lambda: current.end + timedelta(minutes=4)
+    notifier.check_camera()
+    assert sent == []  # 4 minutes: not yet
+    notifier.clock = lambda: current.end + timedelta(minutes=6)
+    notifier.check_camera()
+    notifier.check_camera()
+    assert sent == [("The camera has sent nothing since 22:10: the program does not see the crib. "
+                     "Check the camera and the Wi-Fi.", False)] and len(notes) == 1
+
+    class Monitor:
+        def stint(self, now, current): return 0.0
+        def totals(self, now, current): return {}
+        def due(self, now, current): return None
+
+    notifier.update(current.end + timedelta(minutes=7), current, Monitor())
+    notifier.update(current.end + timedelta(minutes=7, seconds=1), current, Monitor())
+    assert sent[1:] == [("The camera works again.", True)]
+
+
+def test_a_recorded_video_sends_nothing(monkeypatch):
+    monkeypatch.setenv(telegram.TOKEN_ENV, "token")
+    monkeypatch.setenv(telegram.CHAT_IDS_ENV, "10")
+    assert notify.Notifier(Config()).bot is not None
+    quiet = notify.Notifier(Config(), live=False)
+    assert quiet.bot is None
+    told = []
+    quiet.notify = told.append
+    from noggin_compass.balance import Alert
+    quiet.alert(Alert("stint", Side.LEFT, Side.RIGHT, 3600.0, {Side.LEFT: 3600.0, Side.RIGHT: 0.0}))
+    assert told == []  # in the log only
+
+
+def test_a_side_is_not_guessed_from_face_points_the_second_pass_could_not_check():
+    from noggin_compass.cli import analyze
+    from noggin_compass.pose import Person
+
+    xy, conf = np.zeros((17, 2)), np.zeros(17)
+    xy[[0, 1, 2, 4, 5, 6]] = [(200, 100), (190, 95), (210, 95), (230, 100), (170, 160), (230, 160)]
+    conf[[0, 1, 2, 4, 5, 6]] = 0.9
+
+    class Detector:
+        def __init__(self, checked):
+            self.checked = checked
+
+        def detect_upright(self, frame, min_conf, now):
+            return Person(np.array([150.0, 80.0, 250.0, 280.0]), 0.9, xy, conf, checked=self.checked)
+
+    cfg = Config()
+    frame = np.zeros((300, 400, 3), np.uint8)
+    checked, _ = analyze(Detector(True), frame, cfg, 0.0)
+    assert checked.side != Side.UNKNOWN and checked.code.startswith("ear_and_eyes")
+    estimate, person = analyze(Detector(False), frame, cfg, 0.0)
+    assert estimate.side == Side.UNKNOWN and estimate.code == "unchecked" and person is not None

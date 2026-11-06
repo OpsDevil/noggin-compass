@@ -153,7 +153,12 @@ def estimate_head(
             score = float(np.sign(offset)) * max(0.0, excess) / HALF_HEAD_TO_EYE_DIST
             method = "ear_and_eyes"
         else:
-            score = float(np.sign(offset))
+            # Without the eyes for scale, the direction from the ear to the face tells: well to the
+            # side (more than 30 degrees off the head's axis) is a full profile; closer to the axis
+            # the turn is in doubt, down to none along it. A bare sign would make a face a pixel
+            # to one side of the ear a confident profile.
+            dist = float(np.linalg.norm(xy[face_idx].mean(axis=0) - xy[ear_idx[0]]))
+            score = float(np.sign(offset)) * min(1.0, 2 * abs(offset) / dist) if dist > 1e-6 else 0.0
             method = "one_ear_profile"
     elif visible[NOSE] and eye_dist > 1e-6:
         eyes_mid = (lat(xy[LEFT_EYE]) + lat(xy[RIGHT_EYE])) / 2

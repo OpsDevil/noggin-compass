@@ -4,7 +4,7 @@ import pytest
 
 from noggin_compass.config import SleepConfig
 from noggin_compass.head import Side
-from noggin_compass.sleep import Minute, classify_minutes, find_sleep, sleep_days, sleep_state
+from noggin_compass.sleep import Minute, classify_minutes, find_sleep, render_sleep, sleep_days, sleep_state
 
 T0 = datetime(2026, 11, 4, 21, 0)
 CFG = SleepConfig()
@@ -136,10 +136,16 @@ def test_state_unknown_without_recent_movement_data():
     assert sleep_state(samples, CFG, samples[-1][0]) == (False, None)
 
 
-def test_sleep_is_split_at_day_start():
-    start = datetime(2026, 11, 5, 11, 0)
-    days = sleep_days(frames("s" * 120, start), CFG, time(12, 0))
-    assert [(d.day.day, d.total) for d in days] == [(4, 3600), (5, 3600)]
+def test_a_sleep_across_midnight_gives_each_day_its_hours_and_one_falling_asleep():
+    # Asleep from about 23:00 on the 5th to 01:00 on the 6th.
+    start = datetime(2026, 11, 5, 23, 0)
+    first, second = sleep_days(frames("s" * 120, start), CFG, time(0, 0))
+    assert (first.day.day, second.day.day) == (5, 6)
+    assert second.total == 3600 and second.count == 0 and second.longest == 3600  # the morning hours
+    assert first.count == 1 and first.total == first.periods[0].seconds  # the falling asleep
+    assert first.periods[0].goes_on and second.periods[0].continued
+    lines = render_sleep([first, second], time(0, 0), detail_days=2)
+    assert "(goes on into the next day)" in lines and "00:00-01:00  1 h 00 min (from the day before)" in lines
 
 
 def test_newborn_twitching_in_sleep_stays_asleep():

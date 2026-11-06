@@ -10,13 +10,13 @@ import sys
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import cv2
 
 from .balance import Alert, BalanceMonitor
-from .chart import DAYS_SHOWN, render_chart
+from .chart import DAYS_SHOWN, day_label, render_chart
 from .config import Config
 from .head import Side, side_label
 from .i18n import hours_text, t
@@ -39,6 +39,8 @@ RECENT_WINDOW = timedelta(hours=24)
 SOUND_REPEATS = 3
 # /now says the camera is silent when its last frame is older than this.
 CAMERA_SILENT = timedelta(minutes=2)
+# How often to look whether the camera has gone silent for camera.silent_minutes.
+CAMERA_CHECK_SECONDS = 15
 # The bot's commands, in the order of its menu and of its help.
 COMMANDS = ("now", "stats", "sleep", "nap", "naps", "chart")
 PHOTO_COMMANDS = ("photo", "marked")
@@ -173,8 +175,12 @@ def segments(samples: list, cfg: Config) -> list[Segment]:
 
 
 class Notifier:
-    def __init__(self, cfg: Config):
+    """`live` False is for a recorded video: alerts go to the log only, nothing to Telegram, and
+    there is no camera to watch."""
+
+    def __init__(self, cfg: Config, live: bool = True):
         self.cfg = cfg
+        self.live = live
         self.status = Status()
         self.frame: Frame | None = None
         self.naps = NapBook(cfg.storage.db_path)
@@ -184,7 +190,11 @@ class Notifier:
         # still end now, and /now can tell that its news is old.
         self.clock = datetime.now
         self.commands = COMMANDS + (PHOTO_COMMANDS if cfg.telegram.photos else ())
-        token, chat_ids = resolve_credentials(cfg.telegram.token, cfg.telegram.chat_ids)
+        self._camera_silent = False
+        self._camera_lock = threading.Lock()
+        self._stopped = threading.Event()
+        self._started = self.clock()
+        token, chat_ids = resolve_credentials(cfg.telegram.token, cfg.telegram.chat_ids) if live else (None, [])
         menu = [(name, self._describe(name)) for name in self.commands]
         self.bot = (
             TelegramBot(token, chat_ids, self.handle_command, commands=menu, on_button=self.press)
@@ -203,14 +213,37 @@ class Notifier:
 
     def start(self) -> None:
         self.outbox.start()
+        self._started = self.clock()
         if self.bot is not None:
             self.bot.start()
             log.info(t("tg.started", count=len(self.bot.chat_ids)))
+        if self.live and self.cfg.camera.silent_minutes:
+            threading.Thread(target=self._watch_camera, name="camera-watch", daemon=True).start()
 
     def stop(self) -> None:
+        self._stopped.set()
         if self.bot is not None:
             self.bot.stop()
         self.outbox.stop()
+
+    def _watch_camera(self) -> None:
+        while not self._stopped.wait(CAMERA_CHECK_SECONDS):
+            self.check_camera()
+
+    def check_camera(self) -> None:
+        """Say once when the camera has gone silent: the run loop waits for frames then and could
+        not tell anyone, so the parents would think the program is watching."""
+        last = self.status.time or self._started
+        if self.clock() - last < timedelta(minutes=self.cfg.camera.silent_minutes):
+            return
+        with self._camera_lock:
+            if self._camera_silent:
+                return
+            self._camera_silent = True
+        text = t("camera.silent", time=f"{last:%H:%M}")
+        log.warning(text)
+        self.notify(text)
+        self.send(text)
 
     def send(self, text: str | Reply, silent: bool = False) -> None:
         if self.bot is not None:
@@ -219,15 +252,26 @@ class Notifier:
     def notify(self, text: str) -> None:
         self.outbox.put(mac_notification, text)
 
-    def press(self, data: str) -> str | Reply | None:
+    def press(self, data: str) -> str | Reply | Photo | None:
         if data.startswith("climate:"):
             return None if self.climate is None else self.climate.press(data)
+        if data.startswith("chart:"):
+            value = data.removeprefix("chart:")
+            try:
+                return self.chart(None if value == "recent" else date.fromisoformat(value))
+            except ValueError:  # a button from an older version of the program
+                return None
         return self.naps.press(data)
 
     def update(self, now: datetime, current: Segment | None, monitor: BalanceMonitor, asleep: str | None = None) -> None:
         self.status = Status(
             now, current, monitor.stint(now, current), monitor.totals(now, current), monitor.due(now, current), asleep
         )
+        with self._camera_lock:
+            back, self._camera_silent = self._camera_silent, False
+        if back:
+            log.info(t("camera.back"))
+            self.send(t("camera.back"), silent=True)
 
     def set_frame(self, frame: Frame) -> None:
         self.frame = frame
@@ -235,6 +279,8 @@ class Notifier:
     def alert(self, alert: Alert) -> None:
         text = format_alert(alert, self.cfg.alerts.window_hours)
         log.warning(text)
+        if not self.live:  # a recorded video: what would have been said, in the log only
+            return
         self.notify(text)
         if self.cfg.alerts.sound:
             threading.Thread(target=play, args=(self.cfg.alerts.sound_file, 1.0, SOUND_REPEATS), daemon=True).start()
@@ -272,31 +318,44 @@ class Notifier:
         caption = t("bot.photo_caption", time=f"{frame.time:%H:%M:%S}", side=side_label(frame.estimate.side), score=score)
         return Photo(jpeg.tobytes(), caption)
 
-    def _recent(self, now: datetime):
-        """The last RECENT_WINDOW: head summary (None without data), sleeps that overlap the window
-        (whole; `within` cuts them to it for the numbers), and the raw activity. A sleep that began
-        earlier is found too."""
-        since = now - RECENT_WINDOW
+    def _window(self, since: datetime, until: datetime):
+        """Head summary (None without data), the sleeps that overlap [since, until) (whole;
+        `within` cuts them to it for the numbers), and the raw activity. A sleep that began earlier
+        is found too."""
         storage = Storage(self.cfg.storage.db_path)
         try:
-            samples = storage.samples(since, now)
-            activity = storage.activity(since - SLEEP_LOOKBACK, now)
-            naps = nap_periods(storage, since, now)
+            samples = storage.samples(since, until)
+            activity = storage.activity(since - SLEEP_LOOKBACK, until)
+            naps = nap_periods(storage, since, until)
         finally:
             storage.close()
         found = segments(samples, self.cfg)
         summary = summarize(since.date(), found) if found else None
-        periods = [p for p in with_naps(find_sleep(activity, self.cfg.sleep), naps) if p.end > since]
-        return summary, periods, activity, since
+        sleeps = with_naps(find_sleep(activity, self.cfg.sleep), naps)
+        periods = [p for p in sleeps if p.end > since and p.start < until]
+        return summary, periods, activity
 
-    def chart(self) -> str | Photo:
+    def _recent(self, now: datetime):
+        since = now - RECENT_WINDOW
+        return (*self._window(since, now), since)
+
+    def chart(self, day: date | None = None) -> str | Photo:
+        """The last RECENT_WINDOW, or one calendar day, with buttons under it to see another day."""
         now = self.clock()
-        summary, periods, _, since = self._recent(now)
         day_start = parse_day_start(self.cfg.tracking.day_starts_at)
-        first = day_bounds(day_of(now, day_start) - timedelta(days=DAYS_SHOWN - 1), day_start)[0]
+        if day is None:
+            summary, periods, _, since = self._recent(now)
+            until, title = now, t("chart.title_recent", window=window_text())
+        else:
+            since, end = day_bounds(day, day_start)
+            until = min(end, now)
+            summary, periods, _ = self._window(since, until)
+            title = t("chart.title_day", date=day_label(day, day_start))
+        # The per-day panel: the days up to the one shown.
+        first = day_bounds(day_of(until, day_start) - timedelta(days=DAYS_SHOWN - 1), day_start)[0]
         storage = Storage(self.cfg.storage.db_path)
         try:
-            samples = storage.samples(first, now)
+            samples = storage.samples(first, until)
         finally:
             storage.close()
         days = build_report(
@@ -306,10 +365,20 @@ class Notifier:
             gap_seconds=self.cfg.tracking.gap_seconds,
             day_start=day_start,
         )
-        png = render_chart(summary, within(periods, since), days, t("chart.title_recent", window=window_text()), day_start)
+        buttons = self._chart_buttons(day_of(now, day_start))
+        clipped = [p for p in within(periods, since) if p.start < until]
+        png = render_chart(summary, clipped, days, title, day_start)
         if png is None:
-            return t("report.no_data")
-        return Photo(png, t("bot.chart_caption", time=f"{now:%H:%M}"), filename="chart.png")
+            empty = t("report.no_data") if day is None else t("chart.no_data_day", date=day_label(day, day_start))
+            return Reply(empty, buttons)
+        return Photo(png, t("bot.chart_caption", time=f"{now:%H:%M}"), filename="chart.png", buttons=buttons)
+
+    @staticmethod
+    def _chart_buttons(today: date) -> list[list[tuple[str, str]]]:
+        days = [today - timedelta(days=n) for n in range(DAYS_SHOWN)]
+        label = {0: t("chart.btn.today"), 1: t("chart.btn.yesterday")}
+        named = [(label.get(n, f"{d:%d.%m}"), f"chart:{d.isoformat()}") for n, d in enumerate(days)]
+        return [[(t("chart.btn.recent", window=window_text()), "chart:recent"), *named[:2]], named[2:]]
 
     def now_text(self) -> str:
         status = self.status

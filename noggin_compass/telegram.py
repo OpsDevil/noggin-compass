@@ -33,6 +33,7 @@ class Photo:
     image: bytes  # JPEG or PNG, as the file name says
     caption: str = ""
     filename: str = "frame.jpg"
+    buttons: list[list[tuple[str, str]]] = field(default_factory=list)  # rows of (label, data), as in Reply
 
     @property
     def content_type(self) -> str:
@@ -69,7 +70,7 @@ class TelegramBot:
         handler: Callable[[str], str | Photo | Reply | None],
         opener: Callable = urllib.request.urlopen,
         commands: list[tuple[str, str]] = (),
-        on_button: Callable[[str], str | Reply | None] | None = None,
+        on_button: Callable[[str], str | Reply | Photo | None] | None = None,
     ):
         self.token = token
         self.chat_ids = set(chat_ids)
@@ -95,9 +96,12 @@ class TelegramBot:
 
     def send_photo(self, chat: int, photo: Photo) -> bool:
         boundary = uuid.uuid4().hex
+        fields = [("chat_id", chat), ("caption", photo.caption)]
+        if photo.buttons:
+            fields.append(("reply_markup", Reply("", photo.buttons).markup()))
         parts = [
             f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode()
-            for name, value in (("chat_id", chat), ("caption", photo.caption))
+            for name, value in fields
         ]
         parts.append(
             f'--{boundary}\r\nContent-Disposition: form-data; name="photo"; filename="{photo.filename}"\r\n'
@@ -136,6 +140,15 @@ class TelegramBot:
             return
         reply = self.on_button(query.get("data") or "") if self.on_button else None
         if reply is None:
+            return
+        # A picture always comes as a new message, and so does any answer to a button under a
+        # picture: a picture's message has no text to replace.
+        if isinstance(reply, Photo):
+            if not self.send_photo(chat, reply):
+                self.send(t("tg.photo_failed"), [chat])
+            return
+        if "photo" in message:
+            self.send(reply, [chat])
             return
         reply = reply if isinstance(reply, Reply) else Reply(reply)
         try:

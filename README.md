@@ -28,8 +28,9 @@ repositioning helps.
 
 > [!IMPORTANT]
 > This is a hobby project, **not a medical device and not a baby monitor**. It does not watch
-> breathing and raises no safety alarms. If your baby strongly prefers one side, talk to your
-> paediatrician.
+> breathing. Its alerts (time to turn, a cold room, a silent camera) are a help, not a guarantee, and
+> each can be turned off, see [Turning alerts off](#turning-alerts-off). If your baby strongly
+> prefers one side, talk to your paediatrician.
 
 ## What it sees
 
@@ -191,7 +192,7 @@ uv run noggin-compass [--config FILE] [--lang en|ru] thermometer [--seconds N]
 | `-c`, `--config FILE` | Config file to use. Default: `config.yaml` in the current folder; without it the built-in defaults are used. |
 | `--lang en\|ru` | Interface language for this run, overrides `language` from the config. |
 | **`run`** | Watch the camera (or a video file) and record the head position every second. |
-| `--source SOURCE` | Use another video source just this once: an RTSP address, `0` for the webcam or a video file. |
+| `--source SOURCE` | Use another video source just this once: an RTSP address, `0` for the webcam or a video file. A video file is not tonight: its frames go to a database of their own (`<db_path>-replay.db`), not among the real nights, and nothing goes to Telegram, rings or reads the thermometers. |
 | `--preview` | Open a window with the frame and everything that was detected. Close it with `q`. |
 | `--model MODEL` | Use another model just this once, see [Models](#models). |
 | `--device DEVICE` | Run the network on `cpu`, `mps` (Apple Silicon GPU) or `0` (first NVIDIA GPU) just this once. |
@@ -206,7 +207,7 @@ uv run noggin-compass [--config FILE] [--lang en|ru] thermometer [--seconds N]
 | **`thermometer`** | Find the thermometers nearby, show their readings and choose which ones to read, see [Thermometer](#thermometer). |
 | `--seconds N` | How long to look for thermometers. Default: 30. |
 
-A report day runs from noon to noon, so a whole night lands in one day. In the timeline every row
+Report days are calendar days, midnight to midnight. In the timeline every row
 is an hour and every character a minute: `L` left, `R` right, `·` straight, `?` in the crib but the face is not
 visible, `_` nobody in the crib. The raw score of every frame is stored, so after changing the threshold
 or the smoothing the report re-computes old nights too.
@@ -235,9 +236,11 @@ stays on that side. The numbers above are an example; agree on the limits with y
 
 **Telegram.** Alerts can also go to Telegram, and the bot answers `/now` (where the head is, whether
 it is time to turn and whether the baby is asleep), and over the last 24 hours `/stats` (time per
-side), `/sleep` (sleep, see [Sleep](#sleep)) and `/chart` (a chart like `report --chart`). With
-`/nap` and `/naps`, parents log sleep the camera cannot see, see [Sleep](#sleep). When the camera
-has sent nothing for over 2 minutes, `/now` says so first. To set it up:
+side), `/sleep` (sleep, see [Sleep](#sleep)) and `/chart` (a chart; buttons under it show today,
+yesterday or another day of the last week, midnight to midnight). With `/nap` and `/naps`, parents
+log sleep the camera cannot see, see [Sleep](#sleep). When the camera has sent nothing for
+`camera.silent_minutes` (5), the bot says so, since the program does not see the crib then, and
+says again when it works; `/now` also starts with it. To set it up:
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and store its token in the macOS Keychain
    (the command asks for the token and does not echo it):
@@ -258,6 +261,18 @@ pictures go through Telegram.
 
 The token and chat ids can also go into `config.yaml` (`telegram.token`, `telegram.chat_ids`). The
 token is looked up in this order: `NOGGIN_TELEGRAM_TOKEN`, `telegram.token`, the Keychain.
+
+### Turning alerts off
+
+Every alert can be turned off:
+
+* **Time to turn:** off while `alerts.max_same_side_minutes` and `alerts.max_imbalance_minutes`
+  are 0, which is the default; `alerts.sound: false` keeps it to a notification and Telegram.
+* **Cold:** the **Turn off** button under the alarm silences it for `thermometers.cold.snooze_minutes`;
+  `alarm: false` next to a thermometer turns it off for that one, and
+  `thermometers.limits.alarm: false` for all of them (cold then only gives a tip).
+* **A silent camera:** `camera.silent_minutes: 0`.
+* Tips, a lost thermometer and a low battery come without a sound.
 
 ## Sleep
 
@@ -280,10 +295,11 @@ for the last 24 hours, `/now` and the preview whether the baby is asleep right n
 is stored, so changed thresholds apply to old nights too.
 
 ```
-Sleep (days start at 12:00):
+Sleep by day:
 04.11 (Wed)  11 h 20 min, sleeps: 4, longest: 4 h 05 min
 
 Sleep on 04.11.2026:
+  00:00-01:50  1 h 50 min (from the day before)
   13:10-14:35  1 h 25 min
   16:00-17:30  1 h 30 min (outside the crib)
   ...
@@ -409,6 +425,7 @@ name, rather than at night when the option is first used.
 | `language` | `en` | Language of the messages, the report and the preview: `en` or `ru`. |
 | **camera** | | |
 | `camera.source` | `0` | Where the video comes from: an RTSP address, `0` for the built-in webcam, or a video file. |
+| `camera.silent_minutes` | `5` | Telegram says so when the camera has sent nothing for this many minutes, and again when it works. 0 turns it off. |
 | `camera.password` | not set | Camera password, put in place of `{password}` in the address. The `NOGGIN_CAMERA_PASSWORD` environment variable takes precedence; if neither is set, the macOS Keychain entry `noggin-compass-camera` is used. |
 | `camera.sample_fps` | `1` | How many frames per second are analysed. The head does not turn often, one is plenty. |
 | `camera.rotate` | `0` | Rotates the picture by 90, 180 or 270 degrees before the analysis. |
@@ -432,7 +449,7 @@ name, rather than at night when the option is first used.
 | **tracking** | | |
 | `tracking.confirm_seconds` | `10` | How long a new head position has to hold before it counts. Filters out single-frame mistakes and brief twitches. |
 | `tracking.gap_seconds` | `60` | If no frames arrive for longer (camera or Wi-Fi dropped out), that time is not counted for any side. |
-| `tracking.day_starts_at` | `12:00` | When a report day begins. Noon keeps a whole night in one day. |
+| `tracking.day_starts_at` | `00:00` | When a report day begins: calendar days by default. A sleep across midnight gives each day its hours, and counts as falling asleep once, in the day it began; its lines say so. |
 | **alerts** | | |
 | `alerts.max_same_side_minutes` | `0` (off) | Alert when the head has stayed on one side this many minutes, see [Turn alerts](#turn-alerts-and-telegram). |
 | `alerts.max_imbalance_minutes` | `0` (off) | Alert when one side is ahead of the other by this many minutes over `alerts.window_hours` and the head is on that side again. |

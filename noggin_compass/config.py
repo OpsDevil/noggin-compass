@@ -29,6 +29,9 @@ class CameraConfig:
     roi: list[float] | None = None
     # Camera password for {password} in source. NOGGIN_CAMERA_PASSWORD takes precedence.
     password: str | None = None
+    # Telegram says so when the camera has sent nothing for this many minutes, and again when it
+    # is back: the program does not see the crib meanwhile. 0 turns it off.
+    silent_minutes: float = 5
 
 
 @dataclass
@@ -81,8 +84,9 @@ class TrackingConfig:
     confirm_seconds: float = 10.0
     # A gap in the data longer than this (camera dropped out) is not counted.
     gap_seconds: float = 60.0
-    # Start of a report day. Noon to noon keeps a whole night in one day.
-    day_starts_at: str = "12:00"
+    # Start of a report day: calendar days, midnight to midnight. A sleep across midnight gives
+    # each day its hours, and counts as falling asleep once, in the day it began.
+    day_starts_at: str = "00:00"
 
 
 @dataclass

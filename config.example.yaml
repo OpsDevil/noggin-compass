@@ -14,6 +14,7 @@ camera:
   # camera.password below, the macOS Keychain entry "noggin-compass-camera".
   source: 0
   password:                 # camera password; the environment variable takes precedence
+  silent_minutes: 5         # Telegram says so when the camera sends nothing this long; 0: off
   sample_fps: 1             # frames analysed per second; the head does not turn often
   rotate: 0                 # rotate the picture by 0, 90, 180 or 270 degrees before analysis
   roi:                      # crib area as fractions of the frame [left, top, right, bottom],
@@ -48,7 +49,7 @@ head:
 tracking:
   confirm_seconds: 10       # a new head position counts after holding this long
   gap_seconds: 60           # a longer pause without frames is a gap and is not counted
-  day_starts_at: "12:00"    # report days run from noon to noon, so a night stays in one day
+  day_starts_at: "00:00"    # report days: midnight to midnight; a night gives each day its hours
 
 alerts:
   # "Time to turn the baby" alerts: a sound and a notification on this computer plus a Telegram

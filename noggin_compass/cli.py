@@ -24,7 +24,7 @@ from .pose import Person, PoseDetector
 from .preview import Frame, corner_notes, fit, picture
 from .report import build_report, day_bounds, day_of, fmt_duration, parse_day_start, render
 from .sleep import SLEEP_LOOKBACK, render_sleep, sleep_days, sleep_line
-from .source import open_source, preprocess
+from .source import is_file_source, open_source, preprocess
 from .storage import Storage
 from .thermometer import ThermometerPoller, menu
 from .tracker import SideTracker
@@ -63,6 +63,11 @@ def analyze(
             # In the crib, but the pose model lost it: a white sleep sack at night, a blanket.
             return HeadEstimate(Side.UNKNOWN, method="baby_unseen"), None
         return HeadEstimate(Side.ABSENT, method="no_person"), None
+    if not person.checked:
+        # The second pass found nothing to check the face points on. Measured on 849 night frames
+        # (2026-11-05 and 06), this gave a side in 2% of them from points the first pass is often
+        # wrong about, and "not visible" in the rest: the side is not guessed, the baby is still there.
+        return HeadEstimate(Side.UNKNOWN, method="unchecked"), person
     estimate = estimate_head(
         person.xy,
         person.conf,
@@ -139,12 +144,20 @@ def run(cfg: Config, args: argparse.Namespace) -> None:
         from .presence import start
 
         presence = start(cfg.presence.model, cfg.detector.device, cfg.presence.threshold, cfg.presence.every_seconds)
-    check_sounds(cfg)
+    # A recorded video is not tonight: its frames go to a database of their own, so they do not
+    # mix with the real nights, and nothing goes to Telegram or rings for it.
+    replay = is_file_source(source_spec)
+    if replay:
+        db = Path(cfg.storage.db_path)
+        cfg.storage.db_path = str(db.with_name(f"{db.stem}-replay{db.suffix}"))
+        log.info(t("cli.replay", path=cfg.storage.db_path))
+    else:
+        check_sounds(cfg)
     # The main connection first: it creates or updates the tables before any thread opens its own.
     storage = Storage(cfg.storage.db_path)
-    notifier = Notifier(cfg)
+    notifier = Notifier(cfg, live=not replay)
     thermometers = siren = watch = None
-    if cfg.thermometers.devices:
+    if cfg.thermometers.devices and not replay:
         from .climate import ClimateWatch, Siren
 
         watch = ClimateWatch(cfg.thermometers, send=notifier.send, notify=notifier.notify)

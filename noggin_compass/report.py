@@ -161,7 +161,7 @@ def render(summaries: list[DaySummary], day_start: time, timeline_days: int = 1)
     weekdays = t("weekdays").split(",")
     columns = [side_label(side) for side in TRACKED]
     out = [
-        t("report.day_note", start=f"{day_start:%H:%M}"),
+        t("report.day_note_midnight") if day_start == time(0, 0) else t("report.day_note", start=f"{day_start:%H:%M}"),
         "",
         f"{t('report.col.day'):<11}"
         + "".join(f"{c:>16}" for c in columns)

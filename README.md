@@ -273,7 +273,7 @@ barely moves, an awake one turns, kicks and waves its arms. This is how sleep ac
   during sleep do not count, even when they go on for a few minutes in a row.
 
 `noggin-compass report` shows sleep per day and the list of sleeps, `/sleep` in Telegram the same
-for the last 24 hours, `/now` whether the baby is asleep right now. The raw movement of every frame
+for the last 24 hours, `/now` and the preview whether the baby is asleep right now. The raw movement of every frame
 is stored, so changed thresholds apply to old nights too.
 
 ```
@@ -324,11 +324,14 @@ each, and the readings are shown by name. The choice goes into the `thermometers
   account, but to a client that connects it sends them in the open. So every
   `thermometers.every_minutes` the program connects for about 10 seconds, takes one reading and
   disconnects. Staying connected would drain the coin cell, and the phone app could not connect
-  meanwhile.
-* **What you see.** `/now` ends with a line such as "Temperature 24.0 °C, humidity 50%.", with
-  several thermometers one line per name. A reading older than two polls gets its age, and when the
-  battery drops below `thermometers.low_battery_volts` `/now` says so. Each reading also goes to
-  the log and to the database (the `climate` table).
+  meanwhile. All chosen thermometers are looked for in one search and each is read as soon as it
+  is seen, so one with a weak signal does not hold up the others. The menu saves the readings it
+  takes, so they show up right after the restart.
+* **What you see.** `/now` ends with a line such as "Temperature 24.0 °C, humidity 50%, battery
+  71%.", with several thermometers one line per name. The battery percentage is a rough guess from
+  the voltage: a coin cell holds about 2.9 V most of its life and then drops fast. A reading older
+  than two polls gets its age. The preview shows the same lines without the battery. Each reading
+  also goes to the log and to the database (the `climate` table).
 * **Bluetooth on a Mac.** The first time, macOS asks whether the terminal may use Bluetooth: allow
   it. A program started without that permission is stopped by macOS, so start it from a terminal.
   The computer has to be within Bluetooth range of each thermometer, about 10 m through a wall.
@@ -337,6 +340,55 @@ each, and the readings are shown by name. The choice goes into the `thermometers
   and choose again on another computer.
 * If a thermometer does not answer (out of range, busy with the phone app), the log says so once
   and the program tries again at the next poll. The camera goes on either way.
+
+### Cold alarm
+
+For a window or a door left open at night. When a thermometer shows less than
+`thermometers.limits.cold_below` (18 °C):
+
+1. A quiet beep on the computer running the program once a minute, and one Telegram message:
+   "Crib: 17.8 °C, colder than 18 °C. Check the windows and the door. If it is not warmer in 10 min,
+   the alarm goes off." From then on the thermometers are read every 2 minutes.
+2. If after 10 minutes it is not warmer, the alarm: a loud sound with no pause, a notification on
+   the computer and a Telegram message with a **Turn off** button every 2 minutes. If the
+   temperature falls by another degree before the 10 minutes are up, the alarm starts at once.
+   If it is getting warmer by itself, the quiet beeping goes on for another 10 minutes instead.
+3. **Turn off** silences the alarm for 20 minutes. If by then it is not warmer, the alarm comes back.
+4. Once it is above `cold_below` again, it all ends, and Telegram says so without a sound.
+
+`/now` says what the alarm is doing. The sounds play on the computer, so keep its volume up. The
+times and the sounds are in `thermometers.cold`.
+
+### Tips, a lost thermometer, a low battery
+
+Telegram also says, without a sound:
+
+* when it gets warmer than `hot_above` (22 °C), drier than `dry_below` (40%) or damper than
+  `humid_above` (60%), with what to do about it. A tip comes when the trouble begins, and the same
+  one no sooner than `thermometers.tips_every_hours` later. While it lasts, `/now` shows it too;
+* when a thermometer has not answered for `thermometers.lost_minutes`, and when it answers again;
+* when its battery drops below `thermometers.low_battery_volts`, once a day. It takes a CR2032.
+  Users report 8-12 months from one on these thermometers; readings every 10 minutes cost some of
+  that, so keep a spare.
+
+### Limits for each thermometer
+
+The defaults in `thermometers.limits` follow common pediatric advice for a baby's sleep: 18-22 °C
+and 40-60% humidity. A thermometer can have its own, by the same names, next to its address in
+`config.yaml`:
+
+```yaml
+thermometers:
+  devices:
+    - address: "5E1A7C30-9B2D-4F86-A1C4-3D7E9F2B6A18"
+      name: "Crib"
+      cold_below: 20       # the alarm already below 20 °C
+    - address: "C9047B2E-61D3-4A5F-8E2B-07F4D1A93C5D"
+      name: "Hall"
+      alarm: false         # cold here gives a tip, without the alarm
+```
+
+The menu keeps them when the choice is changed. Restart `noggin-compass run` after editing.
 
 ## Configuration
 
@@ -399,7 +451,23 @@ All options with their defaults are in [`config.example.yaml`](config.example.ya
 | `thermometers.devices` | `[]` | The thermometers to read, each with an `address` and an optional `name`. Easiest to fill in with `noggin-compass thermometer`, see [Thermometer](#thermometer). The name is shown only when there are several. |
 | `thermometers.every_minutes` | `10` | How often to read the thermometers. Each reading connects for about 10 s, which costs the coin cell more than the thermometer's own work, so do not go much lower: the room temperature changes slowly anyway. |
 | `thermometers.scan_seconds` | `90` | How long to look for a thermometer before each reading. It advertises every few seconds, and with a weak signal many are lost: one of ours took 47 s to be seen. The search ends as soon as it is seen, so a longer value costs nothing. Raise it if the log often says a thermometer was not seen. |
-| `thermometers.low_battery_volts` | `2.5` | `/now` says the battery runs low below this voltage. A new CR2032 gives about 3.0 V, and the thermometer stops working at about 2.2 V. |
+| `thermometers.low_battery_volts` | `2.5` | Below this voltage `/now` and Telegram say the battery runs low. A new CR2032 gives about 3.0 V, and the thermometer stops working at about 2.2 V. |
+| `thermometers.lost_minutes` | `30` | Telegram says a thermometer is lost when it has not answered this long, and says it again when it answers. |
+| `thermometers.tips_every_hours` | `3` | A tip about the heat or the humidity comes when the trouble begins, without a sound, and the same one no sooner than this: around a limit it would otherwise come and go every poll. |
+| `thermometers.limits.cold_below` | `18` | Below this (°C) the [cold alarm](#cold-alarm) starts. 18 °C is the bottom of the range usually given for a baby's room, and the WHO's minimum for a home. Each thermometer can have its own, see [Limits for each thermometer](#limits-for-each-thermometer), as can the other limits. |
+| `thermometers.limits.hot_above` | `22` | Above this (°C), a tip to dress the baby lighter or turn the heating down. |
+| `thermometers.limits.dry_below` | `40` | Below this humidity (%), a tip to turn on a humidifier. |
+| `thermometers.limits.humid_above` | `60` | Above this humidity (%), a tip to turn on a dehumidifier. |
+| `thermometers.limits.alarm` | `true` | Whether cold starts the alarm. `false`: a tip, as for the heat. |
+| `thermometers.cold.check_minutes` | `10` | How long the quiet beeping goes on before the alarm, if it does not get warmer. |
+| `thermometers.cold.repeat_minutes` | `2` | How often the alarm message is repeated in Telegram until **Turn off**. |
+| `thermometers.cold.snooze_minutes` | `20` | How long **Turn off** silences the alarm. |
+| `thermometers.cold.warming_degrees` | `0.3` | How much the temperature has to rise to count as getting warmer, and to rise above `cold_below` to end the alarm. The readings wobble by about 0.1 °C: lower, and the alarm may end on that wobble. |
+| `thermometers.cold.colder_degrees` | `1.0` | Falling this much below where the cold began starts the alarm at once, without waiting `check_minutes`. |
+| `thermometers.cold.every_minutes` | `2` | How often to read the thermometers while it is colder than `cold_below` + `close_degrees`, so the alarm follows the temperature. Costs battery, but only on cold nights. |
+| `thermometers.cold.close_degrees` | `1.0` | See `every_minutes` above. |
+| `thermometers.cold.quiet_sound`, `quiet_volume` | `Tink`, `0.3` | The quiet beep: a macOS system sound (Tink, Ping, Sosumi, Funk...) or a sound file, and its volume 0..1. |
+| `thermometers.cold.alarm_sound`, `alarm_volume` | `Sosumi`, `1.0` | The alarm sound and its volume. |
 
 ## Models
 

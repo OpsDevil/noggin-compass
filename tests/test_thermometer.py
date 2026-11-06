@@ -137,6 +137,7 @@ def run_menu(tmp_path, answers, rows, devices=()):
     config = tmp_path / "config.yaml"
     config.write_text("language: en\n")
     cfg = Config()
+    cfg.storage.db_path = str(tmp_path / "db.sqlite")
     cfg.thermometers.devices = list(devices)
     printed = []
     result = menu(cfg, config, 30, ask=answers, out=printed.append, look=nearby(*rows))
@@ -180,24 +181,45 @@ def test_menu_enter_changes_nothing(tmp_path):
 
 def test_a_thermometer_that_does_not_answer_is_logged_once(tmp_path, monkeypatch, caplog):
     caplog.set_level(logging.INFO, logger="noggin_compass")
-    answers = [LookupError("not seen in 60 s"), LookupError("again"), reading(21.5)]
+    polls = [[(CRIB, LookupError("not seen in 60 s"))], [(CRIB, LookupError("again"))], [(CRIB, reading(21.5))]]
 
-    async def fake_read(address, scan_seconds):
-        result = answers.pop(0)
-        if isinstance(result, Exception):
-            raise result
-        return result
+    async def fake_read_all(addresses, scan_seconds):
+        for result in polls.pop(0):
+            yield result
 
-    monkeypatch.setattr(thermometer_module, "read", fake_read)
-    poller = ThermometerPoller([Thermometer(CRIB, "Crib")], str(tmp_path / "db.sqlite"), 10, 60)
+    monkeypatch.setattr(thermometer_module, "read_all", fake_read_all)
+    told = []
+
+    class Watch:
+        def reading(self, device, value):
+            told.append(("reading", device.name, value.temperature))
+
+        def no_answer(self, device):
+            told.append(("no_answer", device.name))
+
+    poller = ThermometerPoller([Thermometer(CRIB, "Crib")], str(tmp_path / "db.sqlite"), 10, 60, Watch())
     storage = Storage(tmp_path / "db.sqlite")
     for _ in range(3):
-        asyncio.run(poller._read_one(poller.devices[0], storage))
+        asyncio.run(poller._read_all(storage))
     warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
     assert warnings == ["Thermometer Crib did not answer (LookupError: not seen in 60 s). Trying again every 10 min"]
     assert "Thermometer Crib answers again" in caplog.text
     assert poller.latest[CRIB].temperature == 21.5 and storage.latest_climate()[CRIB].temperature == 21.5
+    assert told == [("no_answer", "Crib"), ("no_answer", "Crib"), ("reading", "Crib", 21.5)]
     storage.close()
+
+
+def test_bluetooth_off_counts_as_no_answer_from_each(tmp_path, monkeypatch):
+    async def broken(addresses, scan_seconds):
+        raise OSError("Bluetooth is off")
+        yield  # an async generator, like the real one
+
+    monkeypatch.setattr(thermometer_module, "read_all", broken)
+    poller = ThermometerPoller([Thermometer(CRIB), Thermometer(ROOM)], str(tmp_path / "db.sqlite"), 10, 60)
+    storage = Storage(tmp_path / "db.sqlite")
+    asyncio.run(poller._read_all(storage))
+    storage.close()
+    assert poller._failing == {CRIB, ROOM}
 
 
 def test_the_preview_shows_the_readings():

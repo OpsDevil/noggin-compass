@@ -16,10 +16,11 @@ import asyncio
 import logging
 import struct
 import threading
+from contextlib import aclosing
 from dataclasses import dataclass
 from datetime import datetime
 
-from .config import Thermometer
+from .config import ClimateLimits, Thermometer
 from .i18n import t
 from .presence import describe
 from .report import fmt_duration
@@ -96,6 +97,74 @@ async def read(target: str | object, scan_seconds: float) -> Reading:
     return parse(data, datetime.now())
 
 
+async def read_all(addresses: list[str], scan_seconds: float):
+    """Readings from several thermometers with one search. Each is read as soon as it is seen, so
+    one with a weak signal does not hold up the others. Yields (address, reading or the error)."""
+    from bleak import BleakScanner
+
+    loop = asyncio.get_running_loop()
+    missing = {address.upper(): address for address in addresses}
+    seen: asyncio.Queue = asyncio.Queue()
+
+    def detected(device, _advertisement) -> None:
+        address = missing.pop(device.address.upper(), None)
+        if address is not None:
+            loop.call_soon_threadsafe(seen.put_nowait, (address, device))
+
+    deadline = loop.time() + scan_seconds
+    unread = set(addresses)
+    async with BleakScanner(detection_callback=detected):
+        while unread:
+            # One seen already is read even when the time is up.
+            try:
+                address, device = seen.get_nowait()
+            except asyncio.QueueEmpty:
+                if deadline <= loop.time():
+                    break
+                try:
+                    address, device = await asyncio.wait_for(seen.get(), deadline - loop.time())
+                except asyncio.TimeoutError:
+                    break
+            unread.discard(address)
+            try:
+                yield address, await read(device, scan_seconds)
+            except Exception as error:
+                yield address, error
+    for address in addresses:
+        if address in unread:
+            yield address, LookupError(t("thermo.not_found", seconds=f"{scan_seconds:g}"))
+
+
+def battery_percent(volts: float) -> int:
+    """Roughly how much is left in the CR2032, as custom firmwares for this thermometer count it:
+    3.1 V is full, 2.2 V is empty, a straight line in between. A coin cell holds about 2.9 V most
+    of its life and then drops fast, so it is a hint rather than a gauge."""
+    return max(0, min(100, round((volts - 2.2) / 0.009)))
+
+
+def label(device: Thermometer, count: int) -> str:
+    """How messages name a thermometer: by its name, or "the thermometer" when it is the only one."""
+    if device.name:
+        return device.name
+    return t("thermo.label") if count == 1 else device.address[-4:]
+
+
+def tips(reading: Reading, limits: ClimateLimits) -> list[tuple[str, str]]:
+    """What in this reading is off for a baby's sleep, as (hot/cold/dry/humid, advice)."""
+    found = []
+    degrees = {"low": f"{limits.cold_below:g}", "high": f"{limits.hot_above:g}"}
+    if reading.temperature > limits.hot_above:
+        found.append(("hot", t("climate.tip.hot", **degrees)))
+    elif reading.temperature < limits.cold_below:
+        found.append(("cold", t("climate.tip.cold", **degrees)))
+    percent = {"low": f"{limits.dry_below:g}", "high": f"{limits.humid_above:g}"}
+    if reading.humidity < limits.dry_below:
+        found.append(("dry", t("climate.tip.dry", **percent)))
+    elif reading.humidity > limits.humid_above:
+        found.append(("humid", t("climate.tip.humid", **percent)))
+    return found
+
+
 def signal_label(rssi: int) -> str:
     if rssi >= GOOD_SIGNAL:
         return t("thermo.signal_good")
@@ -112,6 +181,7 @@ def climate_lines(
     now: datetime,
     every_minutes: float,
     low_battery_volts: float = 0.0,
+    battery: bool = False,
 ) -> list[str]:
     """One line per thermometer for /now and the preview. The name only matters when there are
     several. A reading older than two polls gets its age, so an old number is not taken for now."""
@@ -124,6 +194,8 @@ def climate_lines(
             lines.append(text)
             continue
         text = reading_text(reading)
+        if battery:
+            text = t("thermo.with_battery", reading=text, percent=battery_percent(reading.battery))
         age = (now - reading.time).total_seconds()
         if age > 2 * every_minutes * 60:
             text = t("thermo.ago", reading=text, ago=fmt_duration(age))
@@ -133,16 +205,36 @@ def climate_lines(
     return lines
 
 
+def tip_lines(
+    devices: list[Thermometer], readings: dict[str, Reading], defaults: ClimateLimits, now: datetime, every_minutes: float
+) -> list[str]:
+    """The advice for /now, from readings no older than two polls: an old one may be over."""
+    lines = []
+    for device in devices:
+        reading = readings.get(device.address)
+        if reading is None or (now - reading.time).total_seconds() > 2 * every_minutes * 60:
+            continue
+        for _, tip in tips(reading, device.limits_from(defaults)):
+            if len(devices) == 1:
+                lines.append(t("climate.tip_line", tip=tip[0].upper() + tip[1:]))
+            else:
+                lines.append(t("climate.tip_line_named", name=label(device, len(devices)), tip=tip))
+    return lines
+
+
 class ThermometerPoller:
     """Reads the chosen thermometers every every_minutes in a thread of its own, saves the
     readings and keeps the latest for the preview. A thermometer that does not answer is logged
-    once and tried again at the next poll; the camera goes on either way."""
+    once and tried again at the next poll; the camera goes on either way. Each result goes to
+    `watch` (a ClimateWatch), which may ask to read more often while it is cold."""
 
-    def __init__(self, devices: list[Thermometer], db_path: str, every_minutes: float, scan_seconds: float):
+    def __init__(self, devices: list[Thermometer], db_path: str, every_minutes: float, scan_seconds: float,
+                 watch=None):
         self.devices = devices
         self.db_path = db_path
         self.every_minutes = every_minutes
         self.scan_seconds = scan_seconds
+        self.watch = watch
         self.latest: dict[str, Reading] = {}
         self._failing: set[str] = set()
         self._stop = threading.Event()
@@ -162,6 +254,8 @@ class ThermometerPoller:
         storage = Storage(self.db_path)
         try:
             self.latest = storage.latest_climate()
+            if self.watch is not None:
+                self.watch.remember(self.latest)
             asyncio.run(self._poll(storage))
         except Exception:  # never let the thread die silently
             log.exception(t("thermo.stopped"))
@@ -170,31 +264,52 @@ class ThermometerPoller:
 
     async def _poll(self, storage) -> None:
         while not self._stop.is_set():
-            for device in self.devices:
-                if self._stop.is_set():
-                    return
-                await self._read_one(device, storage)
+            await self._read_all(storage)
+            minutes = self.every_minutes if self.watch is None else self.watch.poll_minutes()
             # Wait in short steps so that stop() is noticed.
-            for _ in range(int(self.every_minutes * 60)):
+            for _ in range(int(minutes * 60)):
                 if self._stop.is_set():
                     return
                 await asyncio.sleep(1)
 
-    async def _read_one(self, device: Thermometer, storage) -> None:
-        name = device.name or device.address[-4:]
+    async def _read_all(self, storage) -> None:
+        devices = {device.address: device for device in self.devices}
+        done = set()
         try:
-            reading = await read(device.address, self.scan_seconds)
-        except Exception as error:
+            async with aclosing(read_all(list(devices), self.scan_seconds)) as results:
+                async for address, result in results:
+                    done.add(address)
+                    self._result(devices[address], result, storage)
+                    if self._stop.is_set():
+                        return
+        except Exception as error:  # Bluetooth turned off and the like: none of the rest was read
+            for address, device in devices.items():
+                if address not in done:
+                    self._result(device, error, storage)
+
+    def _result(self, device: Thermometer, result: Reading | Exception, storage) -> None:
+        name = device.name or device.address[-4:]
+        if isinstance(result, Exception):
             if device.address not in self._failing:
-                log.warning(t("thermo.failed", name=name, error=describe(error), minutes=f"{self.every_minutes:g}"))
+                log.warning(t("thermo.failed", name=name, error=describe(result), minutes=f"{self.every_minutes:g}"))
             self._failing.add(device.address)
+            self._tell("no_answer", device)
             return
         if device.address in self._failing:
             log.info(t("thermo.recovered", name=name))
         self._failing.discard(device.address)
-        self.latest[device.address] = reading
-        storage.add_climate(device.address, reading)
-        log.info(t("thermo.logged", name=name, reading=reading_text(reading), battery=f"{reading.battery:.2f}"))
+        self.latest[device.address] = result
+        storage.add_climate(device.address, result)
+        log.info(t("thermo.logged", name=name, reading=reading_text(result), battery=f"{result.battery:.2f}"))
+        self._tell("reading", device, result)
+
+    def _tell(self, what: str, *args) -> None:
+        if self.watch is None:
+            return
+        try:
+            getattr(self.watch, what)(*args)
+        except Exception:  # the alarm has a bug: the readings still go on
+            log.exception(t("climate.failed"))
 
 
 async def survey(seconds: float) -> list[tuple[Found, Reading | None, str | None]]:
@@ -253,6 +368,7 @@ def menu(cfg, config_path, seconds: float, ask=input, out=print, look=None) -> l
             out("")
             return None
         if not answer:
+            _keep_readings(cfg, cfg.thermometers.devices, nearby)
             out(t("thermo.menu.unchanged"))
             return None
         if answer == ["0"]:
@@ -278,10 +394,28 @@ def menu(cfg, config_path, seconds: float, ask=input, out=print, look=None) -> l
             except (EOFError, KeyboardInterrupt):
                 out("")
                 return None
-        devices.append(Thermometer(address, name))
+        devices.append(Thermometer(address, name, chosen[address].limits if address in chosen else {}))
+    _keep_readings(cfg, devices, nearby)
     if devices == cfg.thermometers.devices:
         out(t("thermo.menu.unchanged"))
         return None
     save_thermometers(config_path, devices)
     out(t("thermo.menu.saved", path=config_path) if devices else t("thermo.menu.cleared", path=config_path))
     return devices
+
+
+def _keep_readings(cfg, devices: list[Thermometer], nearby) -> None:
+    """Save the readings the menu has just taken of the chosen thermometers, so that /now and the
+    preview have them before the first poll."""
+    chosen = {device.address for device in devices}
+    readings = [(found.address, reading) for found, reading, _ in nearby if reading and found.address in chosen]
+    if not readings:
+        return
+    from .storage import Storage
+
+    storage = Storage(cfg.storage.db_path)
+    try:
+        for address, reading in readings:
+            storage.add_climate(address, reading)
+    finally:
+        storage.close()

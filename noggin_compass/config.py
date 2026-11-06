@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from dataclasses import dataclass, field, fields, is_dataclass
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -148,9 +148,61 @@ class StorageConfig:
 
 
 @dataclass
+class ClimateLimits:
+    """What is too cold, too warm, too dry or too damp for a baby's sleep. The defaults follow
+    common pediatric advice: 18-22 °C and 40-60% humidity. Any thermometer can have its own."""
+
+    # Below this the cold alarm starts. 18 °C is the bottom of the range usually given for a
+    # baby's room, and the WHO's minimum for a home.
+    cold_below: float = 18
+    # Above this /now and Telegram suggest dressing the baby lighter or turning the heating down.
+    hot_above: float = 22
+    # Outside dry_below..humid_above they suggest a humidifier or a dehumidifier.
+    dry_below: float = 40
+    humid_above: float = 60
+    # Whether cold here starts the alarm. Off: a tip like for the heat, no sound.
+    alarm: bool = True
+
+
+LIMITS = tuple(f.name for f in fields(ClimateLimits))
+
+
+@dataclass
 class Thermometer:
     address: str  # as `noggin-compass thermometer` shows it; on a Mac it differs from the sticker
     name: str = ""  # shown when there are several thermometers
+    # This thermometer's own limits, by name as in ClimateLimits; the rest come from
+    # thermometers.limits.
+    limits: dict[str, float | bool] = field(default_factory=dict)
+
+    def limits_from(self, defaults: ClimateLimits) -> ClimateLimits:
+        return replace(defaults, **self.limits)
+
+
+@dataclass
+class ColdAlarmConfig:
+    # When it gets colder than cold_below: first a quiet beep on the computer once a minute and one
+    # Telegram message. If it is not warmer after check_minutes, the alarm: a loud sound with no
+    # pause and a Telegram message with an Off button every repeat_minutes.
+    check_minutes: float = 10
+    repeat_minutes: float = 2
+    # After Off the alarm is quiet this long, then comes back if it is not warmer.
+    snooze_minutes: float = 20
+    # By this much the temperature has to rise to count as getting warmer, and to rise above
+    # cold_below to end it all: the thermometer's readings wobble by about 0.1 °C.
+    warming_degrees: float = 0.3
+    # Falling by this much since it began starts the alarm at once, without waiting check_minutes:
+    # a window opened wide in winter.
+    colder_degrees: float = 1.0
+    # While it is colder than cold_below + close_degrees, read the thermometers every
+    # every_minutes instead of thermometers.every_minutes, so the alarm follows the temperature.
+    every_minutes: float = 2
+    close_degrees: float = 1.0
+    # macOS system sounds (Tink, Sosumi, Funk...) or sound files, with volume 0..1.
+    quiet_sound: str = "Tink"
+    quiet_volume: float = 0.3
+    alarm_sound: str = "Sosumi"
+    alarm_volume: float = 1.0
 
 
 @dataclass
@@ -160,13 +212,20 @@ class ThermometersConfig:
     # Each reading connects for about 10 s, which costs the coin cell more than the thermometer's
     # own work, so not too often: the room temperature changes slowly anyway.
     every_minutes: float = 10
-    # How long to look for a thermometer before a reading. It advertises every few seconds, and
-    # with a weak signal many are lost: on 2026-11-06 one took 47 s to be seen. The search ends as
-    # soon as it is seen.
+    # How long to look for the thermometers before a reading. A thermometer advertises every few
+    # seconds, and with a weak signal many are lost: on 2026-11-06 one took 47 s to be seen. Each
+    # is read as soon as it is seen.
     scan_seconds: float = 90
-    # /now says the battery runs low below this. A new CR2032 gives about 3.0 V, and the
-    # thermometer stops working at about 2.2 V.
+    # Below this /now and Telegram say the battery runs low. A new CR2032 gives about 3.0 V, and
+    # the thermometer stops working at about 2.2 V.
     low_battery_volts: float = 2.5
+    # Telegram says a thermometer is lost when it has not answered this long.
+    lost_minutes: float = 30
+    # A tip about the heat or the humidity comes to Telegram, without a sound, when it starts, and
+    # again no sooner than this.
+    tips_every_hours: float = 3
+    limits: ClimateLimits = field(default_factory=ClimateLimits)
+    cold: ColdAlarmConfig = field(default_factory=ColdAlarmConfig)
 
 
 @dataclass
@@ -239,10 +298,16 @@ def _thermometers(items: Any) -> list[Thermometer]:
             continue
         if not isinstance(item, dict) or not isinstance(item.get("address"), str):
             raise ValueError(t("err.thermometers"))
-        unknown = set(item) - {"address", "name"}
+        unknown = set(item) - {"address", "name", *LIMITS}
         if unknown:
             raise ValueError(t("err.unknown_option", key=f"thermometers.devices.{i + 1}.{sorted(unknown)[0]}"))
-        devices.append(Thermometer(item["address"].strip(), str(item.get("name") or "").strip()))
+        limits = {key: item[key] for key in LIMITS if key in item}
+        for key, value in limits.items():
+            # A bool is an int in Python, so check it first: "alarm: 18" or "cold_below: yes" are typos.
+            wrong = not isinstance(value, bool) if key == "alarm" else isinstance(value, bool) or not isinstance(value, (int, float))
+            if wrong:
+                raise ValueError(t("err.thermometer_value", key=f"thermometers.devices.{i + 1}.{key}"))
+        devices.append(Thermometer(item["address"].strip(), str(item.get("name") or "").strip(), limits))
     return devices
 
 
@@ -256,8 +321,13 @@ def save_thermometers(path: str | Path, devices: list[Thermometer]) -> None:
         block.append(f"    - address: {json.dumps(device.address)}")
         if device.name:
             block.append(f"      name: {json.dumps(device.name, ensure_ascii=False)}")
+        for key, value in device.limits.items():  # kept when the choice is changed in the menu
+            block.append(f"      {key}: {json.dumps(value)}")
 
     section = next((i for i, line in enumerate(lines) if re.fullmatch(r"thermometers:\s*(#.*)?", line)), None)
+    if section is None and any(line.startswith("thermometers:") for line in lines):
+        # "thermometers: {...}" on one line: a second section after it would quietly win over it.
+        raise ValueError(t("err.thermometers_save", path=path))
     if section is None:
         if lines and lines[-1].strip():
             lines.append("")

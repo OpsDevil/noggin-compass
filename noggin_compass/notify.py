@@ -15,7 +15,7 @@ import numpy as np
 
 from .balance import Alert, BalanceMonitor
 from .chart import render_chart
-from .config import Config
+from .config import Config, SleepConfig
 from .head import HeadEstimate, Side, side_label
 from .i18n import t
 from .report import build_report, day_bounds, day_of, fmt_duration, parse_day_start, reclassify, summarize
@@ -26,7 +26,7 @@ from .pose import Person
 from .preview import draw, fit
 from .storage import Storage
 from .telegram import Photo, Reply, TelegramBot, resolve_credentials
-from .thermometer import climate_lines
+from .thermometer import climate_lines, tip_lines
 from .tracker import Segment, build_segments
 
 log = logging.getLogger(__name__)
@@ -71,6 +71,14 @@ def mac_notification(text: str) -> None:
         )
     except FileNotFoundError:  # osascript exists only on macOS
         pass
+
+
+def sleep_line(activity: list, cfg: SleepConfig, now: datetime) -> str | None:
+    """Asleep since when, or awake; None without recent movement data."""
+    asleep, period = sleep_state(activity, cfg, now)
+    if asleep:
+        return t("bot.now_asleep", duration=fmt_duration(period.seconds), since=f"{period.start:%H:%M}")
+    return None if asleep is None else t("bot.now_awake")
 
 
 def format_alert(alert: Alert, window_hours: float) -> str:
@@ -118,6 +126,7 @@ class Notifier:
         self.status = Status()
         self.frame: Frame | None = None
         self.naps = NapBook(cfg.storage.db_path)
+        self.climate = None  # a ClimateWatch, set by run() when there are thermometers
         token, chat_ids = resolve_credentials(cfg.telegram.token, cfg.telegram.chat_ids)
         commands = [
             ("now", t("bot.cmd.now")),
@@ -130,7 +139,7 @@ class Notifier:
         if cfg.telegram.photos:
             commands += [("photo", t("bot.cmd.photo")), ("marked", t("bot.cmd.marked"))]
         self.bot = (
-            TelegramBot(token, chat_ids, self.handle_command, commands=commands, on_button=self.naps.press)
+            TelegramBot(token, chat_ids, self.handle_command, commands=commands, on_button=self.press)
             if token
             else None
         )
@@ -143,6 +152,15 @@ class Notifier:
     def stop(self) -> None:
         if self.bot is not None:
             self.bot.stop()
+
+    def send(self, text: str | Reply, silent: bool = False) -> None:
+        if self.bot is not None:
+            self.bot.send(text, silent=silent)
+
+    def press(self, data: str) -> str | Reply | None:
+        if data.startswith("climate:"):
+            return None if self.climate is None else self.climate.press(data)
+        return self.naps.press(data)
 
     def update(self, now: datetime, current: Segment | None, monitor: BalanceMonitor) -> None:
         self.status = Status(
@@ -261,14 +279,14 @@ class Notifier:
             lines.append(t("bot.ok"))
         if side != Side.ABSENT:
             now = status.time or datetime.now()
-            asleep, period = sleep_state(self._activity(now - SLEEP_LOOKBACK, now), self.cfg.sleep, now)
-            if asleep:
-                lines.append(t("bot.now_asleep", duration=fmt_duration(period.seconds), since=f"{period.start:%H:%M}"))
-            elif asleep is not None:
-                lines.append(t("bot.now_awake"))
+            line = sleep_line(self._activity(now - SLEEP_LOOKBACK, now), self.cfg.sleep, now)
+            if line:
+                lines.append(line)
         return "\n".join(lines + self.climate_lines())
 
     def climate_lines(self) -> list[str]:
+        """Readings with the battery, the alarm if there is one, and what to do about the heat or
+        the humidity."""
         thermometers = self.cfg.thermometers
         if not thermometers.devices:
             return []
@@ -277,8 +295,12 @@ class Notifier:
             readings = storage.latest_climate()
         finally:
             storage.close()
-        return climate_lines(thermometers.devices, readings, datetime.now(), thermometers.every_minutes,
-                             thermometers.low_battery_volts)
+        now = datetime.now()
+        lines = climate_lines(thermometers.devices, readings, now, thermometers.every_minutes,
+                              thermometers.low_battery_volts, battery=True)
+        if self.climate is not None:
+            lines += self.climate.status_lines()
+        return lines + tip_lines(thermometers.devices, readings, thermometers.limits, now, thermometers.every_minutes)
 
     def _activity(self, since: datetime, until: datetime) -> list:
         storage = Storage(self.cfg.storage.db_path)

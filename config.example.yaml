@@ -93,11 +93,43 @@ storage:
 thermometers:
   # Xiaomi Mijia LYWSD03MMC thermometers read over Bluetooth, shown in /now and on the preview.
   # `noggin-compass thermometer` lists the ones nearby with their readings and writes the chosen
-  # ones here, for example:
+  # ones here. A thermometer can have its own limits, by the names in `limits` below:
   #   devices:
   #     - address: "5E1A7C30-9B2D-4F86-A1C4-3D7E9F2B6A18"
   #       name: "Crib"
+  #       cold_below: 20
+  #     - address: "C9047B2E-61D3-4A5F-8E2B-07F4D1A93C5D"
+  #       name: "Hall"
+  #       alarm: false
   devices: []
   every_minutes: 10         # how often to read; each reading connects for about 10 s and costs battery
-  scan_seconds: 90          # how long to look for a thermometer before each reading
-  low_battery_volts: 2.5    # /now says the battery runs low below this; a new one gives about 3.0 V
+  scan_seconds: 90          # how long to look for the thermometers before each reading
+  low_battery_volts: 2.5    # below this the battery runs low; a new one gives about 3.0 V
+  lost_minutes: 30          # Telegram says a thermometer is lost when it has not answered this long
+  tips_every_hours: 3       # a tip about heat or humidity comes, without a sound, no more often than this
+
+  # For every thermometer that has no limits of its own. The defaults follow common pediatric
+  # advice for a baby's sleep: 18-22 °C and 40-60% humidity.
+  limits:
+    cold_below: 18          # the cold alarm starts below this
+    hot_above: 22           # above this, a tip to dress the baby lighter or turn the heating down
+    dry_below: 40           # below this humidity, a tip to turn on a humidifier
+    humid_above: 60         # above this humidity, a tip to turn on a dehumidifier
+    alarm: true             # false: cold gives a tip, without the alarm
+
+  # The cold alarm, for a window or a door left open at night. Below cold_below: a quiet beep on
+  # this computer once a minute and one Telegram message. Not warmer after check_minutes: the alarm,
+  # a loud sound with no pause and a Telegram message with an Off button every repeat_minutes.
+  # Off silences it for snooze_minutes; then it comes back unless it got warmer.
+  cold:
+    check_minutes: 10
+    repeat_minutes: 2
+    snooze_minutes: 20
+    warming_degrees: 0.3    # "warmer" means up by this much; the readings wobble by about 0.1 °C
+    colder_degrees: 1.0     # falling this much below where it began starts the alarm at once
+    every_minutes: 2        # read this often while it is colder than cold_below + close_degrees
+    close_degrees: 1.0
+    quiet_sound: Tink       # macOS system sound (Tink, Ping, Sosumi, Funk...) or a sound file
+    quiet_volume: 0.3       # 0..1
+    alarm_sound: Sosumi
+    alarm_volume: 1.0

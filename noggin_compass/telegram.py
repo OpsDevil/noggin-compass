@@ -109,9 +109,12 @@ class TelegramBot:
         except Exception as error:
             log.warning(t("tg.error", error=error))
 
-    def send(self, text: str | Reply, chat_ids: list[int] | None = None) -> None:
+    def send(self, text: str | Reply, chat_ids: list[int] | None = None, silent: bool = False) -> None:
+        """`silent` delivers it without a sound on the phone: for news that can wait till morning."""
         reply = text if isinstance(text, Reply) else Reply(text)
         extra = {"reply_markup": reply.markup()} if reply.buttons else {}
+        if silent:
+            extra["disable_notification"] = "true"
         for chat in chat_ids or sorted(self.chat_ids):
             try:
                 self.call("sendMessage", chat_id=chat, text=reply.text, **extra)

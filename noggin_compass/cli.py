@@ -18,7 +18,7 @@ from .head import HeadEstimate, Side, estimate_head, side_label
 from .i18n import LANGUAGES, set_language, t
 from .motion import MotionMeter
 from .naps import periods as nap_periods
-from .notify import Notifier, load_history, monitor_from_config
+from .notify import SLEEP_LOOKBACK, Notifier, load_history, mac_notification, monitor_from_config, sleep_line
 from .pose import Person, PoseDetector
 from .preview import draw, fit
 from .report import build_report, day_bounds, day_of, fmt_duration, parse_day_start, render
@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 log = logging.getLogger("noggin_compass")
 
 STATUS_EVERY_SECONDS = 60
+SLEEP_EVERY_SECONDS = 60  # how often the preview works out whether the baby is asleep
 PREVIEW_WINDOW = "noggin-compass"
 
 
@@ -134,18 +135,26 @@ def run(cfg: Config, args: argparse.Namespace) -> None:
         from .presence import start
 
         presence = start(cfg.presence.model, cfg.detector.device, cfg.presence.threshold, cfg.presence.every_seconds)
-    thermometers = None
+    notifier = Notifier(cfg)
+    thermometers = siren = None
     if cfg.thermometers.devices:
+        from .climate import ClimateWatch, Siren
+
+        watch = ClimateWatch(cfg.thermometers, send=notifier.send, notify=mac_notification)
+        notifier.climate = watch
         thermometers = ThermometerPoller(cfg.thermometers.devices, cfg.storage.db_path,
-                                         cfg.thermometers.every_minutes, cfg.thermometers.scan_seconds)
+                                         cfg.thermometers.every_minutes, cfg.thermometers.scan_seconds, watch)
+        siren = Siren(watch, cfg.thermometers.cold)
+        watch.start()
         thermometers.start()
+        siren.start()
     storage = Storage(cfg.storage.db_path)
     tracker = SideTracker(cfg.tracking.confirm_seconds, cfg.tracking.gap_seconds)
     motion_meter = MotionMeter()
     monitor = monitor_from_config(cfg)
-    notifier = Notifier(cfg)
     notifier.start()
-    last_status = last_snapshot = 0.0
+    last_status = last_snapshot = last_sleep = 0.0
+    asleep_note = None
     history_loaded = False
 
     log.info(t("cli.started", source=source_spec, fps=cfg.camera.sample_fps,
@@ -185,9 +194,14 @@ def run(cfg: Config, args: argparse.Namespace) -> None:
                 save_snapshot(frame, ts, estimate, person, cfg.storage.snapshots_dir, cfg.detector, motion,
                               presence.last_score if presence else None)
             if args.preview:
-                notes = () if thermometers is None else climate_lines(
-                    cfg.thermometers.devices, thermometers.latest, datetime.now(),
-                    cfg.thermometers.every_minutes, cfg.thermometers.low_battery_volts)
+                if now - last_sleep >= SLEEP_EVERY_SECONDS:
+                    last_sleep = now
+                    asleep_note = None if current.side == Side.ABSENT else sleep_line(
+                        storage.activity(ts - SLEEP_LOOKBACK, ts), cfg.sleep, ts)
+                notes = [asleep_note] if asleep_note else []
+                if thermometers is not None:
+                    notes += climate_lines(cfg.thermometers.devices, thermometers.latest, datetime.now(),
+                                           cfg.thermometers.every_minutes, cfg.thermometers.low_battery_volts)
                 debug = draw(frame, person, estimate, cfg.detector.min_keypoint_conf, cfg.head.mirrored, notes)
                 cv2.imshow(PREVIEW_WINDOW, fit(debug))
                 if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
@@ -195,6 +209,9 @@ def run(cfg: Config, args: argparse.Namespace) -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        if siren is not None:
+            siren.stop()
+            watch.stop()
         if thermometers is not None:
             thermometers.stop()
         notifier.stop()

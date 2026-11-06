@@ -8,7 +8,7 @@ from datetime import date, datetime, time, timedelta
 
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
-from matplotlib.patches import Rectangle
+from matplotlib.patches import Patch, Rectangle
 
 from .head import Side, side_label
 from .i18n import t
@@ -18,6 +18,9 @@ from .sleep import SleepPeriod
 # Colours checked for colour-blind safety as a set (blue, orange, aqua).
 COLORS = {Side.LEFT: "#2a78d6", Side.RIGHT: "#eb6834", Side.CENTER: "#1baf7a", Side.UNKNOWN: "#d6d5d0"}
 SLEEP_COLOR = "#52514e"
+# Sleep outside the crib, entered by the parents: apart from the sides by hue and from the crib
+# sleep by lightness.
+OUTSIDE_COLOR = "#a77fd8"
 SURFACE = "#fcfcfb"
 TEXT = "#0b0b0b"
 TEXT_SECONDARY = "#52514e"
@@ -92,10 +95,21 @@ def _timeline(ax, day: DaySummary, sleep: list[SleepPeriod]) -> None:
     for seg in day.segments:
         if seg.side in COLORS:
             ax.broken_barh([(x(seg.start), seg.seconds / 3600)], (1.1, 0.8), color=COLORS[seg.side], lw=0)
-    for period in sleep:
-        begin, finish = max(period.start, start), min(period.end, end)
+    def bar(begin: datetime, finish: datetime, color: str) -> None:
+        begin, finish = max(begin, start), min(finish, end)
         if finish > begin:
-            ax.broken_barh([(x(begin), (finish - begin).total_seconds() / 3600)], (0.1, 0.8), color=SLEEP_COLOR, lw=0)
+            ax.broken_barh([(x(begin), (finish - begin).total_seconds() / 3600)], (0.1, 0.8), color=color, lw=0)
+
+    for period in sleep:
+        bar(period.start, period.end, SLEEP_COLOR)
+        for begin, finish in period.outside:
+            bar(begin, finish, OUTSIDE_COLOR)
+    if any(period.outside for period in sleep):
+        ax.legend(
+            handles=[Patch(color=SLEEP_COLOR, label=t("chart.in_crib")), Patch(color=OUTSIDE_COLOR, label=t("chart.outside"))],
+            loc="lower right", bbox_to_anchor=(1, 1), ncol=2, frameon=False, fontsize=10,
+            labelcolor=TEXT_SECONDARY, handlelength=1, borderaxespad=0.2,
+        )
     hours = int(round(x(end)))
     step = 1 if hours <= 12 else 2
     ax.set_xticks(range(0, hours + 1, step))

@@ -1,4 +1,4 @@
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 
 import pytest
 
@@ -171,10 +171,10 @@ def test_naps_join_the_camera_sleep_without_counting_twice():
 
     crib = [SleepPeriod(T0, minutes_after(60)), SleepPeriod(minutes_after(200), minutes_after(260), ongoing=True)]
     naps = [
-        SleepPeriod(minutes_after(-120), minutes_after(-60), manual=True),  # in arms, before
-        SleepPeriod(minutes_after(40), minutes_after(90), manual=True),  # overlaps the crib sleep
-        SleepPeriod(minutes_after(100), minutes_after(130), manual=True),
-        SleepPeriod(minutes_after(110), minutes_after(120), manual=True),  # entered twice
+        SleepPeriod.nap(minutes_after(-120), minutes_after(-60)),  # in arms, before
+        SleepPeriod.nap(minutes_after(40), minutes_after(90)),  # overlaps the crib sleep
+        SleepPeriod.nap(minutes_after(100), minutes_after(130)),
+        SleepPeriod.nap(minutes_after(110), minutes_after(120)),  # entered twice
     ]
     merged = with_naps(crib, naps)
     assert [(p.start, p.end, p.manual, p.ongoing) for p in merged] == [
@@ -188,7 +188,7 @@ def test_naps_join_the_camera_sleep_without_counting_twice():
 def test_naps_count_in_sleep_days_and_are_marked():
     from noggin_compass.sleep import SleepPeriod, render_sleep
 
-    nap = SleepPeriod(minutes_after(-120), minutes_after(-60), manual=True)
+    nap = SleepPeriod.nap(minutes_after(-120), minutes_after(-60))
     days = sleep_days(frames("s" * 30), CFG, time(12, 0), [nap])
     assert [(d.total, len(d.periods)) for d in days] == [(90 * 60, 2)]
     assert "19:00-20:00  1 h 00 min (outside the crib)" in render_sleep(days, time(12, 0))
@@ -202,3 +202,41 @@ def test_state_unknown_while_the_baby_in_the_crib_is_unseen():
     samples = frames("s" * 15 + "u" * 1)
     asleep, _ = sleep_state(samples, CFG, samples[-1][0])
     assert asleep
+
+
+def test_only_the_entered_minutes_are_marked_outside_the_crib():
+    from noggin_compass.sleep import SleepPeriod, period_lines, with_naps
+
+    crib = [SleepPeriod(T0, minutes_after(60))]
+    (merged,) = with_naps(crib, [SleepPeriod.nap(minutes_after(40), minutes_after(90))])
+    assert (merged.start, merged.end, merged.manual) == (T0, minutes_after(90), False)
+    assert merged.outside == ((minutes_after(40), minutes_after(90)),)
+    assert period_lines([merged], now=minutes_after(600)) == ["21:00-22:30  1 h 30 min (outside the crib 21:40-22:30)"]
+
+
+def test_a_nap_and_a_crib_sleep_close_together_join_only_when_asked():
+    from noggin_compass.sleep import SleepPeriod, with_naps
+
+    pram = SleepPeriod.nap(T0, minutes_after(60))
+    crib = SleepPeriod(minutes_after(63), minutes_after(120))
+    later = SleepPeriod(minutes_after(130), minutes_after(150))
+    assert len(with_naps([crib, later], [pram])) == 3
+    joined = with_naps([crib, later], [pram], timedelta(minutes=5))
+    # The minutes of carrying count as sleep; two sleeps in the crib are not joined by this.
+    assert [(p.start, p.end, p.outside) for p in joined] == [
+        (T0, minutes_after(120), ((T0, minutes_after(60)),)),
+        (minutes_after(130), minutes_after(150), ()),
+    ]
+    cfg = SleepConfig(join_minutes=5)
+    days = sleep_days(frames("s" * 30, minutes_after(62)), cfg, time(0, 0), [pram])
+    assert [len(d.periods) for d in days] == [1]
+
+
+def test_outside_stretches_are_cut_with_the_day():
+    from noggin_compass.sleep import SleepPeriod, split_by_day
+
+    night = SleepPeriod(datetime(2026, 11, 4, 23, 0), datetime(2026, 11, 5, 2, 0),
+                        outside=((datetime(2026, 11, 4, 23, 30), datetime(2026, 11, 5, 0, 30)),))
+    days = split_by_day([night], time(0, 0))
+    assert days[date(2026, 11, 4)][0].outside == ((datetime(2026, 11, 4, 23, 30), datetime(2026, 11, 5, 0, 0)),)
+    assert days[date(2026, 11, 5)][0].outside == ((datetime(2026, 11, 5, 0, 0), datetime(2026, 11, 5, 0, 30)),)

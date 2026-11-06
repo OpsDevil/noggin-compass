@@ -33,7 +33,8 @@ def test_chart_of_one_and_several_days_in_both_languages():
     for seg in recent.segments:
         recent.totals[seg.side] += seg.seconds
     # A sleep that began before the chart starts is cut at its left edge.
-    sleep = [SleepPeriod(T0 - timedelta(hours=2), T0 + timedelta(hours=3))]
+    sleep = [SleepPeriod(T0 - timedelta(hours=2), T0 + timedelta(hours=3),
+                         outside=((T0 - timedelta(hours=2), T0 - timedelta(hours=1)),))]
     for language in ("en", "ru"):
         set_language(language)
         one = render_chart(recent, sleep, [recent], "title", time(12))

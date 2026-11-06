@@ -35,22 +35,55 @@ class Minute(StrEnum):
     MISSING = "missing"
 
 
+Span = tuple[datetime, datetime]
+
+
 @dataclass
 class SleepPeriod:
     start: datetime
     end: datetime
     # True if the data ended while the baby was still asleep.
     ongoing: bool = False
-    # Entered by the parents, not seen by the camera.
-    manual: bool = False
+    # The stretches of it outside the crib, entered by the parents, in time order. A sleep the
+    # camera saw that overlaps an entered one becomes one sleep with both.
+    outside: tuple[Span, ...] = ()
     # A piece of a sleep cut at the start of a day: it began the day before.
     continued: bool = False
     # A piece of a sleep cut at the end of a day: it goes on into the next one.
     goes_on: bool = False
 
+    @classmethod
+    def nap(cls, start: datetime, end: datetime, ongoing: bool = False) -> SleepPeriod:
+        """A sleep outside the crib, as the parents entered it."""
+        return cls(start, end, ongoing, outside=((start, end),))
+
     @property
     def seconds(self) -> float:
         return (self.end - self.start).total_seconds()
+
+    @property
+    def manual(self) -> bool:
+        """All of it outside the crib."""
+        return self.outside == ((self.start, self.end),)
+
+    def cut(self, start: datetime, end: datetime, **flags) -> SleepPeriod:
+        """The part of it within [start, end), its outside stretches cut to it."""
+        start, end = max(start, self.start), min(end, self.end)
+        return SleepPeriod(start, end, self.ongoing and end == self.end, _clip(self.outside, start, end), **flags)
+
+
+def _clip(spans: tuple[Span, ...], start: datetime, end: datetime) -> tuple[Span, ...]:
+    return tuple((max(a, start), min(b, end)) for a, b in spans if min(b, end) > max(a, start))
+
+
+def _union(spans: list[Span]) -> tuple[Span, ...]:
+    merged: list[Span] = []
+    for a, b in sorted(spans):
+        if merged and a <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+        else:
+            merged.append((a, b))
+    return tuple(merged)
 
 
 def classify_minutes(
@@ -156,8 +189,7 @@ def split_by_day(periods: list[SleepPeriod], day_start: time) -> dict[date, list
         while start < period.end:
             day = day_of(start, day_start)
             end = min(period.end, day_bounds(day, day_start)[1])
-            days[day].append(SleepPeriod(start, end, period.ongoing and end == period.end, period.manual,
-                                         continued=start > period.start, goes_on=end < period.end))
+            days[day].append(period.cut(start, end, continued=start > period.start, goes_on=end < period.end))
             start = end
     return dict(days)
 
@@ -188,22 +220,41 @@ class SleepDay:
 def within(periods: list[SleepPeriod], since: datetime) -> list[SleepPeriod]:
     """What of each period falls after `since`: for the totals and the longest of a window, so a
     sleep that began before it counts only its part inside."""
-    return [SleepPeriod(max(p.start, since), p.end, p.ongoing, p.manual) for p in periods if p.end > since]
+    return [p.cut(since, p.end) for p in periods if p.end > since]
 
 
-def with_naps(periods: list[SleepPeriod], naps: list[SleepPeriod]) -> list[SleepPeriod]:
+def with_naps(
+    periods: list[SleepPeriod], naps: list[SleepPeriod], join: timedelta = timedelta(0)
+) -> list[SleepPeriod]:
     """Sleep the camera found plus the naps the parents entered, in time order. Overlapping ones
     become one sleep, so a nap entered for a sleep the camera also saw, or entered twice, is not
-    counted twice."""
+    counted twice. A nap and a sleep in the crib with at most `join` between them are one sleep
+    too, the time between counted as sleep: the baby was carried to the crib asleep."""
     merged: list[SleepPeriod] = []
     for p in sorted(list(periods) + list(naps), key=lambda p: p.start):
         last = merged[-1] if merged else None
-        if last is not None and p.start <= last.end:
+        touching = last is not None and p.start <= last.end
+        carried = last is not None and (last.outside or p.outside) and p.start - last.end <= join
+        if touching or carried:
             ongoing = p.ongoing if p.end >= last.end else last.ongoing
-            merged[-1] = SleepPeriod(last.start, max(last.end, p.end), ongoing, last.manual and p.manual)
+            outside = _union(list(last.outside) + list(p.outside))
+            merged[-1] = SleepPeriod(last.start, max(last.end, p.end), ongoing, outside)
         else:
             merged.append(p)
     return merged
+
+
+def all_sleep(
+    samples: list[tuple[datetime, Side, float | None]], cfg: SleepConfig, naps: list[SleepPeriod] = ()
+) -> list[SleepPeriod]:
+    """The sleep the camera found and the naps the parents entered, as every report shows it."""
+    return with_naps(find_sleep(samples, cfg), naps, timedelta(minutes=cfg.join_minutes))
+
+
+def overlaps(span: Span, periods: list[SleepPeriod]) -> list[Span]:
+    """The parts of `span` that fall into the given sleeps."""
+    return [(max(span[0], p.start), min(span[1], p.end)) for p in periods
+            if min(span[1], p.end) > max(span[0], p.start)]
 
 
 def sleep_days(
@@ -212,8 +263,12 @@ def sleep_days(
     day_start: time,
     naps: list[SleepPeriod] = (),
 ) -> list[SleepDay]:
-    days = split_by_day(with_naps(find_sleep(samples, cfg), naps), day_start)
+    days = split_by_day(all_sleep(samples, cfg, naps), day_start)
     return [SleepDay(day, periods) for day, periods in sorted(days.items())]
+
+
+def spans_text(spans: tuple[Span, ...] | list[Span]) -> str:
+    return ", ".join(f"{a:%H:%M}-{b:%H:%M}" for a, b in spans)
 
 
 def period_lines(periods: list[SleepPeriod], now: datetime | None = None) -> list[str]:
@@ -229,6 +284,8 @@ def period_lines(periods: list[SleepPeriod], now: datetime | None = None) -> lis
         )
         if p.manual:
             line = t("sleep.manual", line=line)
+        elif p.outside:
+            line = t("sleep.partly_manual", line=line, spans=spans_text(p.outside))
         if p.continued:
             line = t("sleep.continued", line=line)
         if p.goes_on:

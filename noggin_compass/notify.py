@@ -27,7 +27,7 @@ from .naps import NapBook
 from .naps import periods as nap_periods
 from .preview import Frame, fit, picture
 from .report import build_report, day_bounds, day_of, fmt_duration, parse_day_start, segments_from, summarize
-from .sleep import SLEEP_LOOKBACK, find_sleep, no_sleep_text, period_lines, with_naps, within
+from .sleep import SLEEP_LOOKBACK, all_sleep, no_sleep_text, period_lines, within
 from .storage import Storage
 from .telegram import Photo, Reply, TelegramBot, resolve_credentials
 from .thermometer import climate_lines, tip_lines
@@ -246,7 +246,7 @@ class Notifier:
         self.live = live
         self.status = Status()
         self.frame: Frame | None = None
-        self.naps = NapBook(cfg.storage.db_path)
+        self.naps = NapBook(cfg.storage.db_path, cfg.sleep, clock=lambda: self.clock())
         self.climate = None  # a ClimateWatch, set by run() when there are thermometers
         self.outbox = Outbox()
         # The wall clock, not the last frame's time: with the camera silent, "the last 24 hours"
@@ -358,7 +358,7 @@ class Notifier:
         if command == "/sleep":
             return self.sleep_text()
         if command == "/nap":
-            return self.naps.menu()
+            return self.naps.command(text.strip().partition(" ")[2])
         if command == "/naps":
             return self.naps.list()
         if command == "/chart":
@@ -409,12 +409,12 @@ class Notifier:
         try:
             samples = storage.samples(since, until)
             activity = storage.activity(since - SLEEP_LOOKBACK, until)
-            naps = nap_periods(storage, since, until)
+            naps = nap_periods(storage, since, until, now=self.clock())
         finally:
             storage.close()
         found = segments(samples, self.cfg)
         summary = summarize(since.date(), found) if found else None
-        sleeps = with_naps(find_sleep(activity, self.cfg.sleep), naps)
+        sleeps = all_sleep(activity, self.cfg.sleep, naps)
         periods = [p for p in sleeps if p.end > since and p.start < until]
         return summary, periods, activity
 
@@ -465,8 +465,10 @@ class Notifier:
 
     def now_text(self) -> str:
         status = self.status
+        # Asleep outside the crib: what the camera says about sleep in the crib does not apply.
+        nap = self.naps.current_line()
         if status.current is None:
-            return t("bot.no_data")
+            return "\n".join([t("bot.no_data")] + ([nap] if nap else []))
         lines = []
         if self.clock() - status.time > CAMERA_SILENT:
             lines.append(t("bot.camera_silent", time=f"{status.time:%H:%M}"))
@@ -488,8 +490,8 @@ class Notifier:
             lines.append(t("bot.turn", turn=side_label(status.due.turn_to)))
         elif side in (Side.LEFT, Side.RIGHT):
             lines.append(t("bot.ok"))
-        if status.asleep:
-            lines.append(status.asleep)
+        if nap or status.asleep:
+            lines.append(nap or status.asleep)
         return "\n".join(lines + self.climate_lines())
 
     def climate_lines(self) -> list[str]:

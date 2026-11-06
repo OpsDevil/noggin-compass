@@ -325,9 +325,19 @@ def test_naps_count_in_sleep_and_stats(tmp_path):
         assert notifier.sleep_text().split("\n") == [
             "Сон за последние 24 часа: 2 ч 00 мин, засыпаний: 2, самый долгий: 1 ч 30 мин",
             "14:00-15:30  1 ч 30 мин (вне кроватки)",
-            "22:00-сейчас  30 мин",
+            # Only the entered minutes are marked.
+            "22:00-сейчас  30 мин (вне кроватки 22:10-22:20)",
         ]
         assert "сон 2 ч 00 мин, засыпаний: 2" in notifier.stats_text()
         assert isinstance(notifier.handle_command("/nap"), telegram.Reply)
+        # /nap with a time logs it; /now tells a sleep outside the crib while one is open.
+        assert notifier.handle_command("/nap 21:00-21:20").text.startswith("Записан сон вне кроватки: 21:00-21:20")
+        notifier.naps.press("nap:sleep")
+        notifier.status = notify.Status(T0 + timedelta(minutes=30), Segment(Side.ABSENT, T0, T0 + timedelta(minutes=30)),
+                                        asleep="Сейчас не спит.")
+        notifier.clock = lambda: T0 + timedelta(minutes=50)
+        now = notifier.now_text()
+        assert "Спит вне кроватки уже 20 мин, с 22:30." in now
+        assert "Сейчас не спит." not in now
     finally:
         set_language("en")

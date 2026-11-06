@@ -38,6 +38,13 @@ class Storage:
             "CREATE TABLE IF NOT EXISTS naps ("
             " id INTEGER PRIMARY KEY AUTOINCREMENT, start REAL NOT NULL, end REAL NOT NULL)"
         )
+        # A nap still going on ("fell asleep" pressed, "woke up" not yet) is open; its end is its
+        # start until it is closed.
+        if "open" not in {row[1] for row in self.conn.execute("PRAGMA table_info(naps)")}:
+            try:
+                self.conn.execute("ALTER TABLE naps ADD COLUMN open INTEGER NOT NULL DEFAULT 0")
+            except sqlite3.OperationalError:  # another connection added it a moment ago
+                pass
         # Thermometer readings, by the address the thermometer has on this computer.
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS climate ("
@@ -84,7 +91,7 @@ class Storage:
         """The id of the new nap, or of the same one already there: a button pressed twice, or a
         press that came again, must not log the sleep twice."""
         same = self.conn.execute(
-            "SELECT id FROM naps WHERE start = ? AND end = ?", (start.timestamp(), end.timestamp())
+            "SELECT id FROM naps WHERE start = ? AND end = ? AND open = 0", (start.timestamp(), end.timestamp())
         ).fetchone()
         if same is not None:
             return int(same[0])
@@ -93,6 +100,22 @@ class Storage:
         )
         self.conn.commit()
         return int(cursor.lastrowid)
+
+    def open_nap(self, start: datetime) -> tuple[int, bool]:
+        """(id, True) of a new open nap, or (id, False) of the one already open: there is one
+        baby, so there is one sleep going on at most."""
+        row = self.conn.execute("SELECT id FROM naps WHERE open = 1").fetchone()
+        if row is not None:
+            return int(row[0]), False
+        cursor = self.conn.execute(
+            "INSERT INTO naps (start, end, open) VALUES (?, ?, 1)", (start.timestamp(), start.timestamp())
+        )
+        self.conn.commit()
+        return int(cursor.lastrowid), True
+
+    def close_nap(self, nap_id: int, end: datetime) -> None:
+        self.conn.execute("UPDATE naps SET end = ?, open = 0 WHERE id = ?", (end.timestamp(), nap_id))
+        self.conn.commit()
 
     def update_nap(self, nap_id: int, start: datetime, end: datetime) -> None:
         self.conn.execute(
@@ -104,23 +127,32 @@ class Storage:
         self.conn.execute("DELETE FROM naps WHERE id = ?", (nap_id,))
         self.conn.commit()
 
-    def nap(self, nap_id: int) -> tuple[int, datetime, datetime] | None:
-        row = self.conn.execute("SELECT id, start, end FROM naps WHERE id = ?", (nap_id,)).fetchone()
-        return None if row is None else (row[0], datetime.fromtimestamp(row[1]), datetime.fromtimestamp(row[2]))
+    @staticmethod
+    def _nap_row(nap_id: int, start: float, end: float, is_open: int) -> tuple[int, datetime, datetime | None]:
+        return nap_id, datetime.fromtimestamp(start), None if is_open else datetime.fromtimestamp(end)
+
+    def nap(self, nap_id: int) -> tuple[int, datetime, datetime | None] | None:
+        """(id, start, end); end is None while the nap is open."""
+        row = self.conn.execute("SELECT id, start, end, open FROM naps WHERE id = ?", (nap_id,)).fetchone()
+        return None if row is None else self._nap_row(*row)
+
+    def current_nap(self) -> tuple[int, datetime, None] | None:
+        """The open nap, if there is one."""
+        row = self.conn.execute("SELECT id, start, end, open FROM naps WHERE open = 1").fetchone()
+        return None if row is None else self._nap_row(*row)
 
     def naps(
         self, since: datetime | None = None, until: datetime | None = None, limit: int | None = None
-    ) -> list[tuple[int, datetime, datetime]]:
-        """(id, start, end) of the naps that overlap the period, latest first."""
-        query = "SELECT id, start, end FROM naps WHERE end > ? AND start < ? ORDER BY end DESC"
+    ) -> list[tuple[int, datetime, datetime | None]]:
+        """(id, start, end) of the naps that overlap the period, latest first, an open one (end
+        None) before all."""
+        query = ("SELECT id, start, end, open FROM naps WHERE (end > ? OR open = 1) AND start < ?"
+                 " ORDER BY open DESC, end DESC")
         lo = since.timestamp() if since else 0.0
         hi = until.timestamp() if until else float("inf")
         if limit is not None:
             query += f" LIMIT {int(limit)}"
-        return [
-            (nap_id, datetime.fromtimestamp(start), datetime.fromtimestamp(end))
-            for nap_id, start, end in self.conn.execute(query, (lo, hi))
-        ]
+        return [self._nap_row(*row) for row in self.conn.execute(query, (lo, hi))]
 
     def add_climate(self, address: str, reading: Reading) -> None:
         self.conn.execute(

@@ -144,6 +144,10 @@ class SleepConfig:
     # sleep. 1 by default: in an empty crib the network found "people" in the sheet's pattern, those
     # frames looked still, and joined with the short gaps between them they made up sleep.
     out_minutes: int = 1
+    # A sleep outside the crib, entered by the parents, and a sleep in the crib with at most this
+    # many minutes between them are one sleep, the minutes between counted as sleep: the baby fell
+    # asleep in a pram and was carried to the crib asleep. 0: only overlapping ones are joined.
+    join_minutes: int = 0
 
 
 @dataclass

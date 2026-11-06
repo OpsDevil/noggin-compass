@@ -53,7 +53,7 @@ class ScriptedDetector(PoseDetector):
         self.first = None
         self.crops = []  # second-pass results, in call order
 
-    def detect(self, frame, min_person_conf=None, min_person_area=None):
+    def detect(self, frame, min_person_conf=None, min_person_area=None, within=None):
         if min_person_conf is None:
             return self.first
         return self.crops.pop(0)
@@ -231,3 +231,30 @@ def test_people_smaller_than_min_area_are_ignored():
     assert person.box == pytest.approx(baby)
     # The second pass looks at a crop around the baby and ignores the limit.
     assert detector_seeing([toy], 0.03).detect(FRAME, min_person_area=0.0) is not None
+
+
+def test_on_the_crop_the_person_inside_the_babys_box_is_taken_not_the_largest():
+    baby, toy = [200.0, 100.0, 400.0, 300.0], [0.0, 320.0, 640.0, 480.0]  # the toy is larger, below
+    detector = detector_seeing([baby, toy], 0.0)
+    assert detector.detect(FRAME).box == pytest.approx(toy)  # without a box to look in: the largest
+    assert detector.detect(FRAME, within=np.array([150.0, 50.0, 450.0, 350.0])).box == pytest.approx(baby)
+    assert detector.detect(FRAME, within=np.array([0.0, 0.0, 100.0, 100.0])) is None  # nobody there
+
+
+def test_points_far_outside_the_babys_box_are_dropped():
+    detector = ScriptedDetector()
+    box = np.array([100.0, 100.0, 500.0, 300.0])
+    up = np.array([1.0, 0.0])
+    view = UprightView.around(box, up, detector.imgsz)
+    matrix = view.matrix()
+
+    def to_crop(points):
+        return np.asarray(points, dtype=float) @ matrix[:, :2].T + matrix[:, 2]
+
+    xy, conf = np.zeros((17, 2)), np.full(17, 0.9)
+    xy[0] = to_crop([[450.0, 200.0]])[0]  # the nose, on the baby
+    xy[1] = to_crop([[300.0, 395.0]])[0]  # an "eye" well below the box: a toy next to the baby
+    detector.crops = [Person(np.zeros(4), 0.8, xy, conf)]
+    person = detector._second_pass(np.zeros((400, 600, 3), np.uint8), box, up)
+    assert person.conf[0] == pytest.approx(0.9) and person.xy[0] == pytest.approx([450.0, 200.0])
+    assert person.conf[1] == 0.0 and not person.xy[1].any()

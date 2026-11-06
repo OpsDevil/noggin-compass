@@ -14,6 +14,12 @@ LEFT_SHOULDER, RIGHT_SHOULDER = 5, 6
 # Size of the crop around the baby relative to its bounding box.
 UPRIGHT_MARGIN = 1.3
 UPRIGHT_PERSON_CONF = 0.1
+# On the crop, the baby is the one inside its own box: at least this share of the person found
+# there must lie in it. The crop's margin also holds what lies next to the baby, such as a toy with
+# a face of its own, and on 2026-11-07 the model took a black cat toy by the head for it.
+WITHIN_SHARE = 0.5
+# Keypoints further outside the baby's box than this share of its size are not the baby's.
+OUTSIDE_MARGIN = 0.15
 # How long the crop of the last found baby is tried again. Seen from above in a sleep sack, the
 # baby is missed by the first pass on many frames, but a sleeping baby barely moves, so the old
 # crop still finds it. The limit stops a stale crop from outliving a real change of position.
@@ -62,6 +68,14 @@ class UprightView:
         """Map points from the crop back to source frame coordinates."""
         return (self.rotation.T @ ((xy - self.size / 2).T / self.scale)).T + self.center
 
+    def box_in_crop(self, box: np.ndarray) -> np.ndarray:
+        """The x1, y1, x2, y2 box in the crop that holds a source frame box, turned with the crop."""
+        x1, y1, x2, y2 = box
+        corners = np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=float)
+        matrix = self.matrix()
+        crop = corners @ matrix[:, :2].T + matrix[:, 2]
+        return np.array([*crop.min(axis=0), *crop.max(axis=0)])
+
 
 def body_up(person: Person, min_conf: float) -> np.ndarray | None:
     """Unit vector shoulders -> head, or None if the shoulders or the head are not visible."""
@@ -83,6 +97,20 @@ def _overlap(a: np.ndarray, b: np.ndarray) -> bool:
 
 def _area(box: np.ndarray) -> float:
     return float((box[2] - box[0]) * (box[3] - box[1]))
+
+
+def _share_inside(box: np.ndarray, outer: np.ndarray) -> float:
+    """Which share of `box` lies inside `outer`."""
+    width = min(box[2], outer[2]) - max(box[0], outer[0])
+    height = min(box[3], outer[3]) - max(box[1], outer[1])
+    return max(0.0, width) * max(0.0, height) / max(_area(box), 1e-6)
+
+
+def _outside(xy: np.ndarray, box: np.ndarray) -> np.ndarray:
+    """Which points lie outside the box widened by OUTSIDE_MARGIN of its size."""
+    x1, y1, x2, y2 = box
+    mx, my = OUTSIDE_MARGIN * (x2 - x1), OUTSIDE_MARGIN * (y2 - y1)
+    return (xy[:, 0] < x1 - mx) | (xy[:, 0] > x2 + mx) | (xy[:, 1] < y1 - my) | (xy[:, 1] > y2 + my)
 
 
 def _disable_telemetry() -> None:
@@ -129,7 +157,10 @@ class PoseDetector:
         frame: np.ndarray,
         min_person_conf: float | None = None,
         min_person_area: float | None = None,
+        within: np.ndarray | None = None,
     ) -> Person | None:
+        """The largest person in the frame or, with `within`, the largest of those that lie at
+        least WITHIN_SHARE in that box."""
         conf = self.min_person_conf if min_person_conf is None else min_person_conf
         min_area = self.min_person_area if min_person_area is None else min_person_area
         result = self.model.predict(
@@ -142,6 +173,10 @@ class PoseDetector:
         # threshold a sleep sack needs, the empty crib also yields small "people": a toy on the
         # rail, a strip of the rail at the edge of the frame. They are far smaller than a baby.
         areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+        if within is not None:
+            areas = np.where([_share_inside(b, within) >= WITHIN_SHARE for b in boxes], areas, 0.0)
+            if not areas.any():
+                return None
         if areas.max() < min_area * frame.shape[0] * frame.shape[1]:
             return None
         i = int(areas.argmax())
@@ -188,9 +223,16 @@ class PoseDetector:
         # The first pass already found the baby, so a lower person threshold is safe here: under
         # a blanket, person confidence on the crop can be low. Keypoint confidences from the first
         # pass are not trusted: it is confidently wrong on a baby lying across the frame.
-        second = self.detect(crop, min_person_conf=UPRIGHT_PERSON_CONF, min_person_area=0.0)
+        second = self.detect(crop, min_person_conf=UPRIGHT_PERSON_CONF, min_person_area=0.0,
+                             within=view.box_in_crop(box))
         if second is None:
             return None
         xy = view.to_frame(second.xy)
-        xy[~second.xy.any(axis=1)] = 0  # keypoints the model did not place stay at (0, 0)
-        return Person(box, second.score, xy, second.conf, up)
+        conf = second.conf.copy()
+        unplaced = ~second.xy.any(axis=1)
+        # The model can place a point well outside the person it found: such a point is not the
+        # baby's, and a nose on a toy would decide the side.
+        stray = _outside(xy, box) & ~unplaced
+        conf[stray] = 0.0
+        xy[unplaced | stray] = 0  # keypoints the model did not place, or that are not the baby's, stay at (0, 0)
+        return Person(box, second.score, xy, conf, up)

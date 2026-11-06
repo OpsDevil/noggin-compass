@@ -71,7 +71,8 @@ class PresenceCheck:
             text = self.processor(text=list(BABY + EMPTY), padding="max_length", max_length=64, return_tensors="pt")
             self.text = self._unit(self.model.get_text_features(**text.to(self.device)))
         self.scale = float(self.model.logit_scale.detach().exp())
-        self._last: tuple[float, float] | None = None  # time and score of the last check
+        self._last: tuple[float, float | None] | None = None  # time and score of the last check
+        self._failing = False
 
     def _unit(self, features) -> object:
         features = features if self.torch.is_tensor(features) else features.pooler_output
@@ -88,17 +89,55 @@ class PresenceCheck:
             logits = self.scale * self._unit(self.model.get_image_features(pixel_values=pixels)) @ self.text.T
         return float(logits.softmax(-1)[0, : len(BABY)].sum())
 
-    def check(self, frame: np.ndarray, now: float | None = None) -> bool:
+    def check(self, frame: np.ndarray, now: float | None = None) -> bool | None:
         """Whether the baby is in the crib. Checked every every_seconds; in between the last answer
-        holds, since a baby is not put in or taken out faster than that."""
+        holds, since a baby is not put in or taken out faster than that.
+
+        None if the network failed: the caller then lets the pose model decide, as without the
+        check. It is tried again every every_seconds, so a passing error (the GPU out of memory for
+        a moment) costs a few seconds and a lasting one does not flood the log."""
         if self._last is None or now is None or now - self._last[0] >= self.every_seconds:
-            self._last = (now or 0.0, self.score(frame))
-        return self._last[1] >= self.threshold
+            try:
+                score = self.score(frame)
+            except Exception as error:  # any failure of the network must not stop the camera
+                if not self._failing:
+                    log.warning(t("presence.failed", error=describe(error), seconds=f"{self.every_seconds:g}"),
+                                exc_info=True)
+                self._failing = True
+                score = None
+            else:
+                if self._failing:
+                    log.info(t("presence.recovered"))
+                self._failing = False
+            self._last = (now or 0.0, score)
+        score = self._last[1]
+        return None if score is None else score >= self.threshold
 
     @property
     def last_score(self) -> float | None:
         """The score behind the current answer, saved with the snapshots to tune the threshold."""
         return None if self._last is None else self._last[1]
+
+
+def start(model: str, device: str, threshold: float, every_seconds: float) -> PresenceCheck | None:
+    """The presence check, or None if it cannot be loaded (no internet for the first download, too
+    little memory, a model name that does not exist). The camera then works on the pose model
+    alone, as with presence.enabled: false, rather than not at all."""
+    try:
+        return PresenceCheck(model, device, threshold, every_seconds)
+    except Exception as error:
+        # No traceback: the reason fits in one line (no internet, no such device), while the
+        # transformers traceback is a hundred lines that hide the message.
+        log.warning(t("presence.unavailable", model=model, error=describe(error)))
+        return None
+
+
+def describe(error: Exception) -> str:
+    """The error type and the first line of its message, for one readable log line."""
+    kind = type(error)
+    name = kind.__name__ if kind.__module__ == "builtins" else f"{kind.__module__.split('.')[0]}.{kind.__name__}"
+    text = str(error).strip().splitlines()
+    return f"{name}: {text[0]}" if text else name
 
 
 def torch_device(device: str | int) -> str:

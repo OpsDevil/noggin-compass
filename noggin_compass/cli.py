@@ -44,15 +44,16 @@ def analyze(
     presence: PresenceCheck | None = None,
 ) -> tuple[HeadEstimate, Person | None]:
     """With `presence`, whether the baby is in the crib is decided by it, and the pose model only
-    tells where the head is turned. Without it, the pose model decides both."""
-    if presence is not None and not presence.check(frame, now):
+    tells where the head is turned. Without it, or while it fails, the pose model decides both."""
+    in_crib = None if presence is None else presence.check(frame, now)
+    if in_crib is False:
         return HeadEstimate(Side.ABSENT, method="crib_empty"), None
     if cfg.detector.upright:
         person = detector.detect_upright(frame, cfg.detector.min_keypoint_conf, now)
     else:
         person = detector.detect(frame)
     if person is None:
-        if presence is not None:
+        if in_crib:
             # In the crib, but the pose model lost it: a white sleep sack at night, a blanket.
             return HeadEstimate(Side.UNKNOWN, method="baby_unseen"), None
         return HeadEstimate(Side.ABSENT, method="no_person"), None
@@ -129,11 +130,9 @@ def run(cfg: Config, args: argparse.Namespace) -> None:
     presence = None
     if cfg.presence.enabled:
         # Imported here: it loads transformers, which takes a few seconds.
-        from .presence import PresenceCheck
+        from .presence import start
 
-        presence = PresenceCheck(
-            cfg.presence.model, cfg.detector.device, cfg.presence.threshold, cfg.presence.every_seconds
-        )
+        presence = start(cfg.presence.model, cfg.detector.device, cfg.presence.threshold, cfg.presence.every_seconds)
     storage = Storage(cfg.storage.db_path)
     tracker = SideTracker(cfg.tracking.confirm_seconds, cfg.tracking.gap_seconds)
     motion_meter = MotionMeter()

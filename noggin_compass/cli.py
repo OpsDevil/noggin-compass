@@ -25,6 +25,7 @@ from .report import build_report, day_bounds, day_of, fmt_duration, parse_day_st
 from .sleep import render_sleep, sleep_days
 from .source import open_source, preprocess
 from .storage import Storage
+from .thermometer import ThermometerPoller, climate_lines, menu
 from .tracker import SideTracker
 
 if TYPE_CHECKING:
@@ -133,6 +134,11 @@ def run(cfg: Config, args: argparse.Namespace) -> None:
         from .presence import start
 
         presence = start(cfg.presence.model, cfg.detector.device, cfg.presence.threshold, cfg.presence.every_seconds)
+    thermometers = None
+    if cfg.thermometers.devices:
+        thermometers = ThermometerPoller(cfg.thermometers.devices, cfg.storage.db_path,
+                                         cfg.thermometers.every_minutes, cfg.thermometers.scan_seconds)
+        thermometers.start()
     storage = Storage(cfg.storage.db_path)
     tracker = SideTracker(cfg.tracking.confirm_seconds, cfg.tracking.gap_seconds)
     motion_meter = MotionMeter()
@@ -179,13 +185,18 @@ def run(cfg: Config, args: argparse.Namespace) -> None:
                 save_snapshot(frame, ts, estimate, person, cfg.storage.snapshots_dir, cfg.detector, motion,
                               presence.last_score if presence else None)
             if args.preview:
-                debug = draw(frame, person, estimate, cfg.detector.min_keypoint_conf, cfg.head.mirrored)
+                notes = () if thermometers is None else climate_lines(
+                    cfg.thermometers.devices, thermometers.latest, datetime.now(),
+                    cfg.thermometers.every_minutes, cfg.thermometers.low_battery_volts)
+                debug = draw(frame, person, estimate, cfg.detector.min_keypoint_conf, cfg.head.mirrored, notes)
                 cv2.imshow(PREVIEW_WINDOW, fit(debug))
                 if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
                     break
     except KeyboardInterrupt:
         pass
     finally:
+        if thermometers is not None:
+            thermometers.stop()
         notifier.stop()
         storage.close()
         source.close()
@@ -300,6 +311,9 @@ def build_parser() -> argparse.ArgumentParser:
     draw_cmd = commands.add_parser("draw", help=t("cli.help.draw"))
     draw_cmd.add_argument("snapshots", nargs="+", type=Path, metavar="SNAPSHOT", help=t("cli.help.snapshots"))
     draw_cmd.add_argument("-o", "--out", type=Path, metavar="DIR", help=t("cli.help.out"))
+
+    thermometer_cmd = commands.add_parser("thermometer", help=t("cli.help.thermometer"))
+    thermometer_cmd.add_argument("--seconds", type=float, default=30, help=t("cli.help.seconds"))
     return parser
 
 
@@ -328,6 +342,8 @@ def main(argv: list[str] | None = None) -> None:
         run(cfg, args)
     elif args.command == "draw":
         draw_snapshots(cfg, args)
+    elif args.command == "thermometer":
+        menu(cfg, config_path, args.seconds)
     else:
         report(cfg, args)
 

@@ -26,6 +26,7 @@ from .pose import Person
 from .preview import draw, fit
 from .storage import Storage
 from .telegram import Photo, Reply, TelegramBot, resolve_credentials
+from .thermometer import climate_lines
 from .tracker import Segment, build_segments
 
 log = logging.getLogger(__name__)
@@ -265,7 +266,19 @@ class Notifier:
                 lines.append(t("bot.now_asleep", duration=fmt_duration(period.seconds), since=f"{period.start:%H:%M}"))
             elif asleep is not None:
                 lines.append(t("bot.now_awake"))
-        return "\n".join(lines)
+        return "\n".join(lines + self.climate_lines())
+
+    def climate_lines(self) -> list[str]:
+        thermometers = self.cfg.thermometers
+        if not thermometers.devices:
+            return []
+        storage = Storage(self.cfg.storage.db_path)
+        try:
+            readings = storage.latest_climate()
+        finally:
+            storage.close()
+        return climate_lines(thermometers.devices, readings, datetime.now(), thermometers.every_minutes,
+                             thermometers.low_battery_volts)
 
     def _activity(self, since: datetime, until: datetime) -> list:
         storage = Storage(self.cfg.storage.db_path)

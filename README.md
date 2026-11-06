@@ -107,6 +107,8 @@ Everything runs on your own computer:
   working locally;
 * Telegram is optional: if you turn it on, alert texts and statistics go through Telegram.
   Pictures only go there if you also allow `/photo` with `telegram.photos: true`.
+* thermometer readings stay on your computer too. The thermometers themselves give their readings
+  to anyone within Bluetooth range who connects, that is how they are made.
 
 ## Hardware
 
@@ -179,6 +181,7 @@ uv run noggin-compass report
 uv run noggin-compass [--config FILE] [--lang en|ru] run [options]
 uv run noggin-compass [--config FILE] [--lang en|ru] report [options]
 uv run noggin-compass [--config FILE] [--lang en|ru] draw SNAPSHOT... [-o DIR]
+uv run noggin-compass [--config FILE] [--lang en|ru] thermometer [--seconds N]
 ```
 
 | Option | What it does |
@@ -198,6 +201,8 @@ uv run noggin-compass [--config FILE] [--lang en|ru] draw SNAPSHOT... [-o DIR]
 | `--chart FILE` | Also save a chart of the last day as a PNG: time per side, a timeline of the head and sleep, left versus right per day. |
 | **`draw`** | Draw what was detected on saved snapshots (see `storage.snapshot_every_seconds`), as in the preview window. |
 | `-o`, `--out DIR` | Where to put the drawn copies. Default: next to each snapshot, as `<name>_drawn.jpg`. |
+| **`thermometer`** | Find the thermometers nearby, show their readings and choose which ones to read, see [Thermometer](#thermometer). |
+| `--seconds N` | How long to look for thermometers. Default: 30. |
 
 A report day runs from noon to noon, so a whole night lands in one day. In the timeline every row
 is an hour and every character a minute: `L` left, `R` right, `·` straight, `?` in the crib but the face is not
@@ -291,6 +296,48 @@ that overlaps sleep the camera saw, or one logged by both parents, is counted on
 Lying still with open eyes also counts as sleep. For a rough daily total this is enough; telling
 open eyes from closed would need a face model.
 
+## Thermometer
+
+The program can also show the temperature and humidity next to the baby, in `/now` and on the
+preview. It reads Xiaomi Mijia **LYWSD03MMC** thermometers (the small square ones) over
+Bluetooth, on their stock firmware: no Mi Home account, hub or key is needed.
+
+```bash
+uv run noggin-compass thermometer
+```
+
+looks for thermometers nearby for 30 seconds and lists each one with its reading:
+
+```
+Found nearby: 2
+  1. 24.7 °C, humidity 45%, signal good, battery 2.88 V  (id 3C5D)
+  2. 24.0 °C, humidity 50%, signal good, battery 2.83 V  (id 6A18)
+To tell them apart: hold one in your hand for a minute and look again, its temperature goes up.
+Which ones to read? Numbers separated by spaces, Enter to keep the current choice, 0 for none:
+```
+
+Enter the number of the one in the crib, or several numbers: then the program asks for a name for
+each, and the readings are shown by name. The choice goes into the `thermometers` section of
+`config.yaml`, the rest of the file stays as it was. Restart `noggin-compass run` to start reading.
+
+* **How it reads.** The thermometer broadcasts its readings encrypted with a key from the Xiaomi
+  account, but to a client that connects it sends them in the open. So every
+  `thermometers.every_minutes` the program connects for about 10 seconds, takes one reading and
+  disconnects. Staying connected would drain the coin cell, and the phone app could not connect
+  meanwhile.
+* **What you see.** `/now` ends with a line such as "Temperature 24.0 °C, humidity 50%.", with
+  several thermometers one line per name. A reading older than two polls gets its age, and when the
+  battery drops below `thermometers.low_battery_volts` `/now` says so. Each reading also goes to
+  the log and to the database (the `climate` table).
+* **Bluetooth on a Mac.** The first time, macOS asks whether the terminal may use Bluetooth: allow
+  it. A program started without that permission is stopped by macOS, so start it from a terminal.
+  The computer has to be within Bluetooth range of each thermometer, about 10 m through a wall.
+* **The address.** On a Mac a Bluetooth device has no fixed MAC address: each Mac gives it its own
+  identifier. So take the address from `noggin-compass thermometer` rather than from the sticker,
+  and choose again on another computer.
+* If a thermometer does not answer (out of range, busy with the phone app), the log says so once
+  and the program tries again at the next poll. The camera goes on either way.
+
 ## Configuration
 
 All options with their defaults are in [`config.example.yaml`](config.example.yaml); copy it to
@@ -349,6 +396,10 @@ All options with their defaults are in [`config.example.yaml`](config.example.ya
 | `storage.db_path` | `data/noggin-compass.db` | SQLite file with the per-second results. |
 | `storage.snapshots_dir` | `data/snapshots` | Where snapshots are saved. |
 | `storage.snapshot_every_seconds` | `0` (off) | Every N seconds saves the frame and a line in `analysis.jsonl` with all keypoints and the score. Use it to check the accuracy by eye, to recompute statistics later without running the network again, or to train a model of your own. To see what was detected on a snapshot, `uv run noggin-compass draw data/snapshots/2026-11-05/0812*.jpg` draws the points on a copy, as in the preview window. A frame takes about 500 KB, so one every 10 s is about 4 GB a day. |
+| `thermometers.devices` | `[]` | The thermometers to read, each with an `address` and an optional `name`. Easiest to fill in with `noggin-compass thermometer`, see [Thermometer](#thermometer). The name is shown only when there are several. |
+| `thermometers.every_minutes` | `10` | How often to read the thermometers. Each reading connects for about 10 s, which costs the coin cell more than the thermometer's own work, so do not go much lower: the room temperature changes slowly anyway. |
+| `thermometers.scan_seconds` | `90` | How long to look for a thermometer before each reading. It advertises every few seconds, and with a weak signal many are lost: one of ours took 47 s to be seen. The search ends as soon as it is seen, so a longer value costs nothing. Raise it if the log often says a thermometer was not seen. |
+| `thermometers.low_battery_volts` | `2.5` | `/now` says the battery runs low below this voltage. A new CR2032 gives about 3.0 V, and the thermometer stops working at about 2.2 V. |
 
 ## Models
 
@@ -429,4 +480,5 @@ library is installed and the model is downloaded on your machine; neither is par
 repository. See also the [Ultralytics licensing terms](https://www.ultralytics.com/license).
 
 The presence check uses Google's SigLIP 2 model and Hugging Face Transformers, both under
-Apache-2.0.
+Apache-2.0. The thermometers are read with [Bleak](https://github.com/hbldh/bleak), under the MIT
+license.

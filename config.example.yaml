@@ -89,3 +89,15 @@ storage:
   snapshots_dir: data/snapshots
   snapshot_every_seconds: 0 # every N seconds save a frame and a line in analysis.jsonl with the
                             # keypoints; 0 turns it off. `noggin-compass draw` shows the points
+
+thermometers:
+  # Xiaomi Mijia LYWSD03MMC thermometers read over Bluetooth, shown in /now and on the preview.
+  # `noggin-compass thermometer` lists the ones nearby with their readings and writes the chosen
+  # ones here, for example:
+  #   devices:
+  #     - address: "5E1A7C30-9B2D-4F86-A1C4-3D7E9F2B6A18"
+  #       name: "Crib"
+  devices: []
+  every_minutes: 10         # how often to read; each reading connects for about 10 s and costs battery
+  scan_seconds: 90          # how long to look for a thermometer before each reading
+  low_battery_volts: 2.5    # /now says the battery runs low below this; a new one gives about 3.0 V

@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .head import HeadEstimate, Side
+from .thermometer import Reading
 
 COMMIT_EVERY = 10
 
@@ -32,6 +33,12 @@ class Storage:
             "CREATE TABLE IF NOT EXISTS naps ("
             " id INTEGER PRIMARY KEY AUTOINCREMENT, start REAL NOT NULL, end REAL NOT NULL)"
         )
+        # Thermometer readings, by the address the thermometer has on this computer.
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS climate ("
+            " ts REAL NOT NULL, address TEXT NOT NULL, temperature REAL, humidity REAL, battery REAL)"
+        )
+        self.conn.execute("CREATE INDEX IF NOT EXISTS climate_ts ON climate(address, ts)")
         self._pending = 0
 
     def add(self, ts: datetime, estimate: HeadEstimate, motion: float | None = None) -> None:
@@ -104,6 +111,24 @@ class Storage:
             (nap_id, datetime.fromtimestamp(start), datetime.fromtimestamp(end))
             for nap_id, start, end in self.conn.execute(query, (lo, hi))
         ]
+
+    def add_climate(self, address: str, reading: Reading) -> None:
+        self.conn.execute(
+            "INSERT INTO climate (ts, address, temperature, humidity, battery) VALUES (?, ?, ?, ?, ?)",
+            (reading.time.timestamp(), address, reading.temperature, reading.humidity, reading.battery),
+        )
+        self.flush()
+
+    def latest_climate(self) -> dict[str, Reading]:
+        """The last reading of each thermometer."""
+        query = (
+            "SELECT address, ts, temperature, humidity, battery FROM climate"
+            " WHERE (address, ts) IN (SELECT address, MAX(ts) FROM climate GROUP BY address)"
+        )
+        return {
+            address: Reading(datetime.fromtimestamp(ts), temperature, int(humidity), battery)
+            for address, ts, temperature, humidity, battery in self.conn.execute(query)
+        }
 
     def close(self) -> None:
         self.flush()

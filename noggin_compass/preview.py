@@ -3,6 +3,7 @@ of them. The head is small in the frame, so it is also shown enlarged in the cor
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from functools import cache
 
 import cv2
@@ -105,7 +106,10 @@ def draw(
     estimate: HeadEstimate,
     min_conf: float,
     mirrored: bool = False,
+    notes: Sequence[str] = (),
 ) -> np.ndarray:
+    """The frame with the points and the estimate. `notes` are extra lines in the bottom left
+    corner, such as the thermometer readings."""
     image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
     clean = image.copy()
     draw_ = ImageDraw.Draw(image)
@@ -143,6 +147,9 @@ def draw(
     size = round(20 * unit)
     _label(draw_, (12, 12), f"{side_label(estimate.side).upper()}{score}", size, color)
     _label(draw_, (12, 12 + size * 1.6), estimate.describe(), round(14 * unit), (230, 230, 230))
+    note_size = round(16 * unit)
+    for row, note in enumerate(reversed(notes)):
+        _label(draw_, (12, image.height - 12 - row * note_size * 1.6), note, note_size, (230, 230, 230), "lb")
     return cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR)
 
 

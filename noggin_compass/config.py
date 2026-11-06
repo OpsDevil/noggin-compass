@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import os
+import re
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Any
@@ -146,6 +148,28 @@ class StorageConfig:
 
 
 @dataclass
+class Thermometer:
+    address: str  # as `noggin-compass thermometer` shows it; on a Mac it differs from the sticker
+    name: str = ""  # shown when there are several thermometers
+
+
+@dataclass
+class ThermometersConfig:
+    # Chosen with `noggin-compass thermometer`; empty means no thermometers are read.
+    devices: list[Thermometer] = field(default_factory=list)
+    # Each reading connects for about 10 s, which costs the coin cell more than the thermometer's
+    # own work, so not too often: the room temperature changes slowly anyway.
+    every_minutes: float = 10
+    # How long to look for a thermometer before a reading. It advertises every few seconds, and
+    # with a weak signal many are lost: on 2026-11-06 one took 47 s to be seen. The search ends as
+    # soon as it is seen.
+    scan_seconds: float = 90
+    # /now says the battery runs low below this. A new CR2032 gives about 3.0 V, and the
+    # thermometer stops working at about 2.2 V.
+    low_battery_volts: float = 2.5
+
+
+@dataclass
 class Config:
     # Interface language: en or ru.
     language: str = "en"
@@ -158,6 +182,7 @@ class Config:
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     sleep: SleepConfig = field(default_factory=SleepConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
+    thermometers: ThermometersConfig = field(default_factory=ThermometersConfig)
 
 
 def _apply(obj: Any, data: dict[str, Any], path: str = "") -> None:
@@ -198,4 +223,60 @@ def load_config(path: str | Path | None) -> Config:
     if path is not None:
         data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
         _apply(cfg, data)
+    cfg.thermometers.devices = _thermometers(cfg.thermometers.devices)
     return cfg
+
+
+def _thermometers(items: Any) -> list[Thermometer]:
+    if not items:
+        return []
+    if not isinstance(items, list):
+        raise ValueError(t("err.thermometers"))
+    devices = []
+    for i, item in enumerate(items):
+        if isinstance(item, Thermometer):
+            devices.append(item)
+            continue
+        if not isinstance(item, dict) or not isinstance(item.get("address"), str):
+            raise ValueError(t("err.thermometers"))
+        unknown = set(item) - {"address", "name"}
+        if unknown:
+            raise ValueError(t("err.unknown_option", key=f"thermometers.devices.{i + 1}.{sorted(unknown)[0]}"))
+        devices.append(Thermometer(item["address"].strip(), str(item.get("name") or "").strip()))
+    return devices
+
+
+def save_thermometers(path: str | Path, devices: list[Thermometer]) -> None:
+    """Write thermometers.devices into the config file and leave the rest of it as it is, comments
+    included: a YAML library would drop them when writing the whole file back."""
+    path = Path(path)
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    block = ["  devices:" + ("" if devices else " []")]
+    for device in devices:
+        block.append(f"    - address: {json.dumps(device.address)}")
+        if device.name:
+            block.append(f"      name: {json.dumps(device.name, ensure_ascii=False)}")
+
+    section = next((i for i, line in enumerate(lines) if re.fullmatch(r"thermometers:\s*(#.*)?", line)), None)
+    if section is None:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines += ["thermometers:", *block]
+    else:
+        end = section + 1  # the section runs to the next line that starts at the left edge
+        while end < len(lines) and (not lines[end].strip() or lines[end][0] in " #"):
+            end += 1
+        start = next((i for i in range(section + 1, end) if lines[i].lstrip().startswith("devices:")), None)
+        if start is None:
+            lines[section + 1:section + 1] = block
+        else:
+            indent = len(lines[start]) - len(lines[start].lstrip())
+            stop = start + 1  # the old list: the lines indented deeper than "devices:"
+            while stop < end and lines[stop].strip() and len(lines[stop]) - len(lines[stop].lstrip()) > indent:
+                stop += 1
+            lines[start:stop] = block
+    text = "\n".join(lines) + "\n"
+    saved = _thermometers((yaml.safe_load(text) or {}).get("thermometers", {}).get("devices"))
+    if saved != devices:  # the file had an unusual layout: better to say so than to write it wrong
+        raise ValueError(t("err.thermometers_save", path=path))
+    path.write_text(text, encoding="utf-8")

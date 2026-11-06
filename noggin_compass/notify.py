@@ -27,7 +27,7 @@ from .naps import NapBook
 from .naps import periods as nap_periods
 from .preview import Frame, fit, picture
 from .report import build_report, day_bounds, day_of, fmt_duration, parse_day_start, segments_from, summarize
-from .sleep import SLEEP_LOOKBACK, all_sleep, no_sleep_text, period_lines, within
+from .sleep import SLEEP_LOOKBACK, all_sleep, asleep_seconds, no_sleep_text, period_lines, within
 from .storage import Storage
 from .telegram import Photo, Reply, TelegramBot, resolve_credentials
 from .thermometer import climate_lines, tip_lines
@@ -525,7 +525,7 @@ class Notifier:
             t(
                 "bot.sleep",
                 window=window_text(),
-                total=fmt_duration(sum(p.seconds for p in inside)),
+                total=fmt_duration(asleep_seconds(inside)),
                 count=len(periods),
                 longest=fmt_duration(max(p.seconds for p in inside)),
             )
@@ -550,7 +550,7 @@ class Notifier:
             turns=s.turns,
         )
         if periods:
-            total = sum(p.seconds for p in within(periods, since))
+            total = asleep_seconds(within(periods, since))
             text += "\n" + t("bot.stats_sleep", total=fmt_duration(total), count=len(periods))
         return text
 

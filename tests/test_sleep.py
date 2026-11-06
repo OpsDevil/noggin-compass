@@ -166,8 +166,8 @@ def test_no_sleep_message_depends_on_movement_data():
     assert "older versions" in no_sleep_text([(T0, Side.RIGHT, None)])
 
 
-def test_naps_join_the_camera_sleep_without_counting_twice():
-    from noggin_compass.sleep import SleepPeriod, with_naps
+def test_naps_and_crib_sleep_stay_apart_but_overlaps_count_once():
+    from noggin_compass.sleep import SleepPeriod, asleep_seconds, shared, with_naps
 
     crib = [SleepPeriod(T0, minutes_after(60)), SleepPeriod(minutes_after(200), minutes_after(260), ongoing=True)]
     naps = [
@@ -175,14 +175,18 @@ def test_naps_join_the_camera_sleep_without_counting_twice():
         SleepPeriod.nap(minutes_after(40), minutes_after(90)),  # overlaps the crib sleep
         SleepPeriod.nap(minutes_after(100), minutes_after(130)),
         SleepPeriod.nap(minutes_after(110), minutes_after(120)),  # entered twice
+        SleepPeriod.nap(minutes_after(130), minutes_after(140)),  # goes on from the one before
     ]
     merged = with_naps(crib, naps)
     assert [(p.start, p.end, p.manual, p.ongoing) for p in merged] == [
         (minutes_after(-120), minutes_after(-60), True, False),
-        (T0, minutes_after(90), False, False),
-        (minutes_after(100), minutes_after(130), True, False),
+        (T0, minutes_after(60), False, False),
+        (minutes_after(40), minutes_after(90), True, False),
+        (minutes_after(100), minutes_after(140), True, False),
         (minutes_after(200), minutes_after(260), False, True),
     ]
+    assert shared(merged) == [(minutes_after(40), minutes_after(60))]
+    assert asleep_seconds(merged) == (60 + 90 + 40 + 60) * 60
 
 
 def test_naps_count_in_sleep_days_and_are_marked():
@@ -204,39 +208,20 @@ def test_state_unknown_while_the_baby_in_the_crib_is_unseen():
     assert asleep
 
 
-def test_only_the_entered_minutes_are_marked_outside_the_crib():
+def test_overlap_is_marked_on_both_sleeps():
     from noggin_compass.sleep import SleepPeriod, period_lines, with_naps
 
-    crib = [SleepPeriod(T0, minutes_after(60))]
-    (merged,) = with_naps(crib, [SleepPeriod.nap(minutes_after(40), minutes_after(90))])
-    assert (merged.start, merged.end, merged.manual) == (T0, minutes_after(90), False)
-    assert merged.outside == ((minutes_after(40), minutes_after(90)),)
-    assert period_lines([merged], now=minutes_after(600)) == ["21:00-22:30  1 h 30 min (outside the crib 21:40-22:30)"]
-
-
-def test_a_nap_and_a_crib_sleep_close_together_join_only_when_asked():
-    from noggin_compass.sleep import SleepPeriod, with_naps
-
-    pram = SleepPeriod.nap(T0, minutes_after(60))
-    crib = SleepPeriod(minutes_after(63), minutes_after(120))
-    later = SleepPeriod(minutes_after(130), minutes_after(150))
-    assert len(with_naps([crib, later], [pram])) == 3
-    joined = with_naps([crib, later], [pram], timedelta(minutes=5))
-    # The minutes of carrying count as sleep; two sleeps in the crib are not joined by this.
-    assert [(p.start, p.end, p.outside) for p in joined] == [
-        (T0, minutes_after(120), ((T0, minutes_after(60)),)),
-        (minutes_after(130), minutes_after(150), ()),
+    merged = with_naps([SleepPeriod(T0, minutes_after(60))], [SleepPeriod.nap(minutes_after(40), minutes_after(90))])
+    assert period_lines(merged, now=minutes_after(600)) == [
+        "21:00-22:00  1 h 00 min (overlaps another sleep: 21:40-22:00)",
+        "21:40-22:30  50 min (outside the crib) (overlaps another sleep: 21:40-22:00)",
     ]
-    cfg = SleepConfig(join_minutes=5)
-    days = sleep_days(frames("s" * 30, minutes_after(62)), cfg, time(0, 0), [pram])
-    assert [len(d.periods) for d in days] == [1]
 
 
-def test_outside_stretches_are_cut_with_the_day():
-    from noggin_compass.sleep import SleepPeriod, split_by_day
+def test_a_nap_right_before_a_crib_sleep_is_another_sleep():
+    # Taken from the pram and put into the crib: the baby woke up and fell asleep again.
+    from noggin_compass.sleep import SleepPeriod
 
-    night = SleepPeriod(datetime(2026, 11, 4, 23, 0), datetime(2026, 11, 5, 2, 0),
-                        outside=((datetime(2026, 11, 4, 23, 30), datetime(2026, 11, 5, 0, 30)),))
-    days = split_by_day([night], time(0, 0))
-    assert days[date(2026, 11, 4)][0].outside == ((datetime(2026, 11, 4, 23, 30), datetime(2026, 11, 5, 0, 0)),)
-    assert days[date(2026, 11, 5)][0].outside == ((datetime(2026, 11, 5, 0, 0), datetime(2026, 11, 5, 0, 30)),)
+    pram = SleepPeriod.nap(minutes_after(-30), T0)
+    (day,) = sleep_days(frames("s" * 30), CFG, time(0, 0), [pram])
+    assert (day.count, day.total) == (2, 60 * 60)

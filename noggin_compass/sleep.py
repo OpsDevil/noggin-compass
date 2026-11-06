@@ -44,9 +44,8 @@ class SleepPeriod:
     end: datetime
     # True if the data ended while the baby was still asleep.
     ongoing: bool = False
-    # The stretches of it outside the crib, entered by the parents, in time order. A sleep the
-    # camera saw that overlaps an entered one becomes one sleep with both.
-    outside: tuple[Span, ...] = ()
+    # Entered by the parents, not seen by the camera.
+    manual: bool = False
     # A piece of a sleep cut at the start of a day: it began the day before.
     continued: bool = False
     # A piece of a sleep cut at the end of a day: it goes on into the next one.
@@ -55,35 +54,49 @@ class SleepPeriod:
     @classmethod
     def nap(cls, start: datetime, end: datetime, ongoing: bool = False) -> SleepPeriod:
         """A sleep outside the crib, as the parents entered it."""
-        return cls(start, end, ongoing, outside=((start, end),))
+        return cls(start, end, ongoing, manual=True)
 
     @property
     def seconds(self) -> float:
         return (self.end - self.start).total_seconds()
 
-    @property
-    def manual(self) -> bool:
-        """All of it outside the crib."""
-        return self.outside == ((self.start, self.end),)
-
     def cut(self, start: datetime, end: datetime, **flags) -> SleepPeriod:
-        """The part of it within [start, end), its outside stretches cut to it."""
+        """The part of it within [start, end)."""
         start, end = max(start, self.start), min(end, self.end)
-        return SleepPeriod(start, end, self.ongoing and end == self.end, _clip(self.outside, start, end), **flags)
+        return SleepPeriod(start, end, self.ongoing and end == self.end, self.manual, **flags)
 
 
-def _clip(spans: tuple[Span, ...], start: datetime, end: datetime) -> tuple[Span, ...]:
-    return tuple((max(a, start), min(b, end)) for a, b in spans if min(b, end) > max(a, start))
-
-
-def _union(spans: list[Span]) -> tuple[Span, ...]:
+def _union(spans: list[Span]) -> list[Span]:
     merged: list[Span] = []
     for a, b in sorted(spans):
         if merged and a <= merged[-1][1]:
             merged[-1] = (merged[-1][0], max(merged[-1][1], b))
         else:
             merged.append((a, b))
-    return tuple(merged)
+    return merged
+
+
+def _intersect(span: Span, spans: list[Span]) -> list[Span]:
+    return [(max(span[0], a), min(span[1], b)) for a, b in spans if min(span[1], b) > max(span[0], a)]
+
+
+def overlaps(span: Span, periods: list[SleepPeriod]) -> list[Span]:
+    """The parts of `span` that fall into the given sleeps."""
+    return _intersect(span, [(p.start, p.end) for p in periods])
+
+
+def shared(periods: list[SleepPeriod]) -> list[Span]:
+    """The times when two sleeps overlap: a sleep outside the crib entered for a time the camera
+    saw the baby asleep in the crib. One of the two is wrong, and the parents should fix it."""
+    spans = []
+    for i, p in enumerate(periods):
+        spans += overlaps((p.start, p.end), periods[i + 1 :])
+    return _union(spans)
+
+
+def asleep_seconds(periods: list[SleepPeriod]) -> float:
+    """Time asleep, the time when sleeps overlap counted once."""
+    return sum((b - a).total_seconds() for a, b in _union([(p.start, p.end) for p in periods]))
 
 
 def classify_minutes(
@@ -203,8 +216,8 @@ class SleepDay:
 
     @property
     def total(self) -> float:
-        """Time asleep within the day."""
-        return sum(p.seconds for p in self.periods)
+        """Time asleep within the day, overlaps counted once."""
+        return asleep_seconds(self.periods)
 
     @property
     def count(self) -> int:
@@ -223,38 +236,27 @@ def within(periods: list[SleepPeriod], since: datetime) -> list[SleepPeriod]:
     return [p.cut(since, p.end) for p in periods if p.end > since]
 
 
-def with_naps(
-    periods: list[SleepPeriod], naps: list[SleepPeriod], join: timedelta = timedelta(0)
-) -> list[SleepPeriod]:
-    """Sleep the camera found plus the naps the parents entered, in time order. Overlapping ones
-    become one sleep, so a nap entered for a sleep the camera also saw, or entered twice, is not
-    counted twice. A nap and a sleep in the crib with at most `join` between them are one sleep
-    too, the time between counted as sleep: the baby was carried to the crib asleep."""
+def with_naps(periods: list[SleepPeriod], naps: list[SleepPeriod]) -> list[SleepPeriod]:
+    """Sleep the camera found plus the naps the parents entered, in time order. A nap and a
+    sleep in the crib stay two sleeps even when they touch or overlap: the baby woke up when it
+    was taken out or put in. Naps that touch or overlap each other (both parents entered it) are
+    one."""
     merged: list[SleepPeriod] = []
-    for p in sorted(list(periods) + list(naps), key=lambda p: p.start):
+    for p in sorted(naps, key=lambda p: p.start):
         last = merged[-1] if merged else None
-        touching = last is not None and p.start <= last.end
-        carried = last is not None and (last.outside or p.outside) and p.start - last.end <= join
-        if touching or carried:
+        if last is not None and p.start <= last.end:
             ongoing = p.ongoing if p.end >= last.end else last.ongoing
-            outside = _union(list(last.outside) + list(p.outside))
-            merged[-1] = SleepPeriod(last.start, max(last.end, p.end), ongoing, outside)
+            merged[-1] = SleepPeriod.nap(last.start, max(last.end, p.end), ongoing)
         else:
             merged.append(p)
-    return merged
+    return sorted(list(periods) + merged, key=lambda p: (p.start, p.end))
 
 
 def all_sleep(
     samples: list[tuple[datetime, Side, float | None]], cfg: SleepConfig, naps: list[SleepPeriod] = ()
 ) -> list[SleepPeriod]:
     """The sleep the camera found and the naps the parents entered, as every report shows it."""
-    return with_naps(find_sleep(samples, cfg), naps, timedelta(minutes=cfg.join_minutes))
-
-
-def overlaps(span: Span, periods: list[SleepPeriod]) -> list[Span]:
-    """The parts of `span` that fall into the given sleeps."""
-    return [(max(span[0], p.start), min(span[1], p.end)) for p in periods
-            if min(span[1], p.end) > max(span[0], p.start)]
+    return with_naps(find_sleep(samples, cfg), naps)
 
 
 def sleep_days(
@@ -267,12 +269,13 @@ def sleep_days(
     return [SleepDay(day, periods) for day, periods in sorted(days.items())]
 
 
-def spans_text(spans: tuple[Span, ...] | list[Span]) -> str:
+def spans_text(spans: list[Span]) -> str:
     return ", ".join(f"{a:%H:%M}-{b:%H:%M}" for a, b in spans)
 
 
 def period_lines(periods: list[SleepPeriod], now: datetime | None = None) -> list[str]:
     now = now or datetime.now()
+    both = shared(periods)
     lines = []
     for p in periods:
         line = t(
@@ -284,8 +287,8 @@ def period_lines(periods: list[SleepPeriod], now: datetime | None = None) -> lis
         )
         if p.manual:
             line = t("sleep.manual", line=line)
-        elif p.outside:
-            line = t("sleep.partly_manual", line=line, spans=spans_text(p.outside))
+        if spans := _intersect((p.start, p.end), both):
+            line = t("sleep.overlap", line=line, spans=spans_text(spans))
         if p.continued:
             line = t("sleep.continued", line=line)
         if p.goes_on:

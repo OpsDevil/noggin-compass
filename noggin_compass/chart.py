@@ -13,7 +13,7 @@ from matplotlib.patches import Patch, Rectangle
 from .head import Side, side_label
 from .i18n import t
 from .report import DaySummary, fmt_duration
-from .sleep import SleepPeriod
+from .sleep import SleepPeriod, shared
 
 # Colours checked for colour-blind safety as a set (blue, orange, aqua).
 COLORS = {Side.LEFT: "#2a78d6", Side.RIGHT: "#eb6834", Side.CENTER: "#1baf7a", Side.UNKNOWN: "#d6d5d0"}
@@ -21,6 +21,15 @@ SLEEP_COLOR = "#52514e"
 # Sleep outside the crib, entered by the parents: apart from the sides by hue and from the crib
 # sleep by lightness.
 OUTSIDE_COLOR = "#a77fd8"
+
+
+def _mix(a: str, b: str) -> str:
+    return "#" + "".join(f"{(int(a[i:i + 2], 16) + int(b[i:i + 2], 16)) // 2:02x}" for i in (1, 3, 5))
+
+
+# A sleep outside the crib entered for a time the camera saw the baby asleep in the crib: the two
+# colours mixed, for the parents to see and fix.
+OVERLAP_COLOR = _mix(SLEEP_COLOR, OUTSIDE_COLOR)
 SURFACE = "#fcfcfb"
 TEXT = "#0b0b0b"
 TEXT_SECONDARY = "#52514e"
@@ -95,20 +104,24 @@ def _timeline(ax, day: DaySummary, sleep: list[SleepPeriod]) -> None:
     for seg in day.segments:
         if seg.side in COLORS:
             ax.broken_barh([(x(seg.start), seg.seconds / 3600)], (1.1, 0.8), color=COLORS[seg.side], lw=0)
+
     def bar(begin: datetime, finish: datetime, color: str) -> None:
         begin, finish = max(begin, start), min(finish, end)
         if finish > begin:
             ax.broken_barh([(x(begin), (finish - begin).total_seconds() / 3600)], (0.1, 0.8), color=color, lw=0)
 
     for period in sleep:
-        bar(period.start, period.end, SLEEP_COLOR)
-        for begin, finish in period.outside:
-            bar(begin, finish, OUTSIDE_COLOR)
-    if any(period.outside for period in sleep):
+        bar(period.start, period.end, OUTSIDE_COLOR if period.manual else SLEEP_COLOR)
+    both = shared(sleep)
+    for begin, finish in both:
+        bar(begin, finish, OVERLAP_COLOR)
+    if any(period.manual for period in sleep):
+        handles = [Patch(color=SLEEP_COLOR, label=t("chart.in_crib")), Patch(color=OUTSIDE_COLOR, label=t("chart.outside"))]
+        if both:
+            handles.append(Patch(color=OVERLAP_COLOR, label=t("chart.overlap")))
         ax.legend(
-            handles=[Patch(color=SLEEP_COLOR, label=t("chart.in_crib")), Patch(color=OUTSIDE_COLOR, label=t("chart.outside"))],
-            loc="lower right", bbox_to_anchor=(1, 1), ncol=2, frameon=False, fontsize=10,
-            labelcolor=TEXT_SECONDARY, handlelength=1, borderaxespad=0.2,
+            handles=handles, loc="lower right", bbox_to_anchor=(1, 1), ncol=len(handles), frameon=False,
+            fontsize=10, labelcolor=TEXT_SECONDARY, handlelength=1, borderaxespad=0.2,
         )
     hours = int(round(x(end)))
     step = 1 if hours <= 12 else 2

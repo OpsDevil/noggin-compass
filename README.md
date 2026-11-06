@@ -326,16 +326,16 @@ parents log them in Telegram, in one of three ways:
 or deleted. To set another time, delete the entry and log it again with `/nap 14:10-15:30`.
 
 Logged sleep counts in `/sleep`, `/stats`, `/chart` and `report`. In the lists it is marked
-"outside the crib", and on the chart it has its own colour. If a nap overlaps sleep the camera saw
-in the crib, or another entry (both parents logged it), the overlapping time is counted once: the
-two become one sleep, and only the logged minutes are marked, as in
-`05:11-07:47  2 h 36 min (outside the crib 05:11-05:41)`. The bot says so when the entry is made:
-"It overlaps sleep in the crib: 12:00-12:10. This time is counted once."
+"outside the crib", and on the chart it has its own colour. A nap and a sleep in the crib are two
+sleeps even when one goes straight into the other: taken out of the pram or put into the crib,
+the baby woke up and fell asleep again. Two entries that touch or overlap (both parents logged it)
+are one sleep.
 
-A baby that fell asleep in a pram and was carried to the crib asleep has a few minutes between the
-two sleeps, and they count as two. With `sleep.join_minutes` above 0, a nap and a sleep in the crib
-that close are one sleep, the minutes between counted as sleep. Two sleeps in the crib are not
-joined by this.
+A nap that overlaps sleep the camera saw in the crib is a mistake in one of the two, so it is
+shown, not hidden: the time they overlap counts once in the totals, both sleeps are marked
+`(overlaps another sleep: 12:00-12:10)`, and on the chart that time has the two colours mixed. The
+bot says so when the entry is made: "It overlaps sleep in the crib: 12:00-12:10. This time is
+counted once." Fix the entry in `/naps`.
 
 Lying still with open eyes also counts as sleep. For a rough daily total this is enough; telling
 open eyes from closed would need a face model.
@@ -500,7 +500,6 @@ name, rather than at night when the option is first used.
 | `sleep.wake_minutes` | `7` | Awake after this many restless minutes... |
 | `sleep.wake_window_minutes` | `10` | ...within this many minutes. |
 | `sleep.out_minutes` | `1` | The baby counts as taken out of the crib only after this many minutes in a row of "not in frame". With the presence check on, a baby the pose network loses stays "not visible" and the sleep goes on, so there is no reason to change it. With `presence.enabled: false` the network sometimes loses a still baby in a white sleep sack for a minute or two in daylight, and the sleep ends; 2-3 keeps such a sleep, but if the network finds "people" in an empty crib (a patterned sheet, an empty sleep sack), it can count sleep that never happened. |
-| `sleep.join_minutes` | `0` | A sleep outside the crib (logged in Telegram) and a sleep in the crib with at most this many minutes between them are one sleep, the minutes between counted as sleep: the baby fell asleep in a pram and was carried to the crib asleep. At 0 only overlapping ones are joined. 5-10 covers carrying the baby home from a walk; a larger value can join a nap with a sleep that really began after the baby woke up. |
 | **storage** | | |
 | `storage.db_path` | `data/noggin-compass.db` | SQLite file with the per-second results. |
 | `storage.snapshots_dir` | `data/snapshots` | Where snapshots are saved. |

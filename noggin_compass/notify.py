@@ -1,43 +1,51 @@
-"""The "time to turn the baby" alert: a sound and a notification on the Mac, a Telegram message.
-Also the bot's replies to /now and /stats."""
+"""What goes out to the parents: the "time to turn the baby" alert, the bot's answers, and the
+one place every message, notification and sound leaves from."""
 
 from __future__ import annotations
 
 import logging
+import queue
 import subprocess
-from pathlib import Path
+import sys
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import cv2
-import numpy as np
 
 from .balance import Alert, BalanceMonitor
-from .chart import render_chart
+from .chart import DAYS_SHOWN, render_chart
 from .config import Config
-from .head import HeadEstimate, Side, side_label
-from .i18n import t
-from .report import build_report, day_bounds, day_of, fmt_duration, parse_day_start, reclassify, summarize
+from .head import Side, side_label
+from .i18n import hours_text, t
 from .naps import NapBook
 from .naps import periods as nap_periods
-from .sleep import SLEEP_LOOKBACK, find_sleep, no_sleep_text, period_lines, sleep_line, with_naps
-from .pose import Person
 from .preview import Frame, fit, picture
+from .report import build_report, day_bounds, day_of, fmt_duration, parse_day_start, segments_from, summarize
+from .sleep import SLEEP_LOOKBACK, find_sleep, no_sleep_text, period_lines, with_naps, within
 from .storage import Storage
 from .telegram import Photo, Reply, TelegramBot, resolve_credentials
 from .thermometer import climate_lines, tip_lines
-from .tracker import Segment, build_segments
+from .tracker import Segment
 
 log = logging.getLogger(__name__)
 
 SYSTEM_SOUNDS = Path("/System/Library/Sounds")
 # The bot answers about a rolling window: "the last 24 hours" needs no explaining, unlike a report
-# day that starts at noon.
+# day that starts at noon. Every text that names the window takes its hours from here.
 RECENT_WINDOW = timedelta(hours=24)
-# Days on the chart's "left and right per day" panel.
-CHART_DAYS = 7
 SOUND_REPEATS = 3
+# /now says the camera is silent when its last frame is older than this.
+CAMERA_SILENT = timedelta(minutes=2)
+# The bot's commands, in the order of its menu and of its help.
+COMMANDS = ("now", "stats", "sleep", "nap", "naps", "chart")
+PHOTO_COMMANDS = ("photo", "marked")
+
+
+def window_text() -> str:
+    return hours_text(RECENT_WINDOW.total_seconds() / 3600)
 
 
 def sound_path(sound: str) -> str:
@@ -47,17 +55,37 @@ def sound_path(sound: str) -> str:
     return str(SYSTEM_SOUNDS / f"{sound}.aiff")
 
 
-def play_sound(sound: str) -> None:
+def check_sounds(cfg: Config) -> None:
+    """Every sound the run may need exists: a typo in a name would otherwise mean an alarm that
+    rings with no sound, found out on the night it is needed."""
+    if sys.platform != "darwin":
+        return
+    wanted = [("alerts.sound_file", cfg.alerts.sound_file)] if cfg.alerts.sound else []
+    if cfg.thermometers.devices:
+        cold = cfg.thermometers.cold
+        wanted += [("thermometers.cold.quiet_sound", cold.quiet_sound), ("thermometers.cold.alarm_sound", cold.alarm_sound)]
+    for key, sound in wanted:
+        if not Path(sound_path(sound)).is_file():
+            raise SystemExit(t("err.sound", key=key, sound=sound))
+
+
+_failed_sounds: set[str] = set()
+
+
+def play(sound: str, volume: float = 1.0, times: int = 1) -> None:
+    """Play a sound on this computer and wait until it ends. One that does not play is logged
+    once, not failed silently every time."""
     path = sound_path(sound)
-
-    def play():
-        for _ in range(SOUND_REPEATS):
-            try:
-                subprocess.run(["afplay", path], check=False)
-            except FileNotFoundError:  # afplay exists only on macOS
-                return
-
-    threading.Thread(target=play, daemon=True).start()
+    for _ in range(times):
+        try:
+            done = subprocess.run(["afplay", "-v", f"{volume:g}", path], check=False, capture_output=True)
+        except FileNotFoundError:  # afplay exists only on macOS
+            return
+        if done.returncode != 0:
+            if path not in _failed_sounds:
+                _failed_sounds.add(path)
+                log.warning(t("notify.sound_failed", sound=sound))
+            return
 
 
 def mac_notification(text: str) -> None:
@@ -69,6 +97,42 @@ def mac_notification(text: str) -> None:
         )
     except FileNotFoundError:  # osascript exists only on macOS
         pass
+
+
+class Outbox:
+    """Everything that goes out to people, Telegram messages and notifications on the Mac, leaves
+    from one thread of its own, in order. Telegram can take half a minute to answer without a
+    network, and neither the camera nor the alarm's sound may wait for it."""
+
+    def __init__(self):
+        self._queue: queue.Queue = queue.Queue()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        self._thread = threading.Thread(target=self._run, name="outbox", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        if self._thread is not None:
+            self._queue.put(None)
+
+    def put(self, how: Callable, *args) -> None:
+        """Deliver from the thread once started; before that (the command line, tests) at once."""
+        if self._thread is None:
+            self._deliver(how, args)
+        else:
+            self._queue.put((how, args))
+
+    def _run(self) -> None:
+        while (letter := self._queue.get()) is not None:
+            self._deliver(*letter)
+
+    @staticmethod
+    def _deliver(how: Callable, args: tuple) -> None:
+        try:
+            how(*args)
+        except Exception:  # one lost message is better than all the ones after it
+            log.exception(t("notify.failed"))
 
 
 def format_alert(alert: Alert, window_hours: float) -> str:
@@ -98,6 +162,14 @@ class Status:
     stint: float = 0.0
     totals: dict[Side, float] = field(default_factory=dict)
     due: Alert | None = None
+    # "Asleep for ..." or "Not asleep", worked out in the main loop for the picture too, so /now
+    # and the picture say the same; None while the baby is out of the crib or nothing is known.
+    asleep: str | None = None
+
+
+def segments(samples: list, cfg: Config) -> list[Segment]:
+    tracking = cfg.tracking
+    return segments_from(samples, cfg.head.center_threshold, tracking.confirm_seconds, tracking.gap_seconds)
 
 
 class Notifier:
@@ -107,24 +179,30 @@ class Notifier:
         self.frame: Frame | None = None
         self.naps = NapBook(cfg.storage.db_path)
         self.climate = None  # a ClimateWatch, set by run() when there are thermometers
+        self.outbox = Outbox()
+        # The wall clock, not the last frame's time: with the camera silent, "the last 24 hours"
+        # still end now, and /now can tell that its news is old.
+        self.clock = datetime.now
+        self.commands = COMMANDS + (PHOTO_COMMANDS if cfg.telegram.photos else ())
         token, chat_ids = resolve_credentials(cfg.telegram.token, cfg.telegram.chat_ids)
-        commands = [
-            ("now", t("bot.cmd.now")),
-            ("stats", t("bot.cmd.stats")),
-            ("sleep", t("bot.cmd.sleep")),
-            ("nap", t("bot.cmd.nap")),
-            ("naps", t("bot.cmd.naps")),
-            ("chart", t("bot.cmd.chart")),
-        ]
-        if cfg.telegram.photos:
-            commands += [("photo", t("bot.cmd.photo")), ("marked", t("bot.cmd.marked"))]
+        menu = [(name, self._describe(name)) for name in self.commands]
         self.bot = (
-            TelegramBot(token, chat_ids, self.handle_command, commands=commands, on_button=self.press)
+            TelegramBot(token, chat_ids, self.handle_command, commands=menu, on_button=self.press)
             if token
             else None
         )
 
+    @staticmethod
+    def _describe(command: str) -> str:
+        return t(f"bot.cmd.{command}", window=window_text())
+
+    def help_text(self) -> str:
+        """Made from the same list as the bot's menu, so it never offers a command that is off."""
+        lines = [f"/{name} - {self._describe(name)}" for name in self.commands]
+        return "\n".join([t("bot.help_title"), *lines, t("bot.help_end")])
+
     def start(self) -> None:
+        self.outbox.start()
         if self.bot is not None:
             self.bot.start()
             log.info(t("tg.started", count=len(self.bot.chat_ids)))
@@ -132,19 +210,23 @@ class Notifier:
     def stop(self) -> None:
         if self.bot is not None:
             self.bot.stop()
+        self.outbox.stop()
 
     def send(self, text: str | Reply, silent: bool = False) -> None:
         if self.bot is not None:
-            self.bot.send(text, silent=silent)
+            self.outbox.put(self.bot.send, text, None, silent)
+
+    def notify(self, text: str) -> None:
+        self.outbox.put(mac_notification, text)
 
     def press(self, data: str) -> str | Reply | None:
         if data.startswith("climate:"):
             return None if self.climate is None else self.climate.press(data)
         return self.naps.press(data)
 
-    def update(self, now: datetime, current: Segment | None, monitor: BalanceMonitor) -> None:
+    def update(self, now: datetime, current: Segment | None, monitor: BalanceMonitor, asleep: str | None = None) -> None:
         self.status = Status(
-            now, current, monitor.stint(now, current), monitor.totals(now, current), monitor.due(now, current)
+            now, current, monitor.stint(now, current), monitor.totals(now, current), monitor.due(now, current), asleep
         )
 
     def set_frame(self, frame: Frame) -> None:
@@ -153,11 +235,10 @@ class Notifier:
     def alert(self, alert: Alert) -> None:
         text = format_alert(alert, self.cfg.alerts.window_hours)
         log.warning(text)
-        mac_notification(text)
+        self.notify(text)
         if self.cfg.alerts.sound:
-            play_sound(self.cfg.alerts.sound_file)
-        if self.bot is not None:
-            self.bot.send(text)
+            threading.Thread(target=play, args=(self.cfg.alerts.sound_file, 1.0, SOUND_REPEATS), daemon=True).start()
+        self.send(text)
 
     def handle_command(self, text: str) -> str | Photo | Reply:
         command = text.strip().split()[0].split("@")[0].lower() if text.strip() else ""
@@ -175,7 +256,7 @@ class Notifier:
             return self.chart()
         if command in ("/photo", "/marked"):
             return self.photo(marked=command == "/marked")
-        return t("bot.help")
+        return self.help_text()
 
     def photo(self, marked: bool) -> str | Photo:
         if not self.cfg.telegram.photos:
@@ -192,8 +273,9 @@ class Notifier:
         return Photo(jpeg.tobytes(), caption)
 
     def _recent(self, now: datetime):
-        """The last 24 hours: head summary (None without data), sleeps that overlap the window,
-        and the raw activity. A sleep that began earlier is found too."""
+        """The last RECENT_WINDOW: head summary (None without data), sleeps that overlap the window
+        (whole; `within` cuts them to it for the numbers), and the raw activity. A sleep that began
+        earlier is found too."""
         since = now - RECENT_WINDOW
         storage = Storage(self.cfg.storage.db_path)
         try:
@@ -202,20 +284,16 @@ class Notifier:
             naps = nap_periods(storage, since, now)
         finally:
             storage.close()
-        segments = build_segments(
-            reclassify(samples, self.cfg.head.center_threshold),
-            self.cfg.tracking.confirm_seconds,
-            self.cfg.tracking.gap_seconds,
-        )
-        summary = summarize(since.date(), segments) if segments else None
+        found = segments(samples, self.cfg)
+        summary = summarize(since.date(), found) if found else None
         periods = [p for p in with_naps(find_sleep(activity, self.cfg.sleep), naps) if p.end > since]
         return summary, periods, activity, since
 
     def chart(self) -> str | Photo:
-        now = self.status.time or datetime.now()
-        summary, periods, _, _ = self._recent(now)
+        now = self.clock()
+        summary, periods, _, since = self._recent(now)
         day_start = parse_day_start(self.cfg.tracking.day_starts_at)
-        first = day_bounds(day_of(now, day_start) - timedelta(days=CHART_DAYS - 1), day_start)[0]
+        first = day_bounds(day_of(now, day_start) - timedelta(days=DAYS_SHOWN - 1), day_start)[0]
         storage = Storage(self.cfg.storage.db_path)
         try:
             samples = storage.samples(first, now)
@@ -228,7 +306,7 @@ class Notifier:
             gap_seconds=self.cfg.tracking.gap_seconds,
             day_start=day_start,
         )
-        png = render_chart(summary, periods, days, t("chart.title_recent"), day_start)
+        png = render_chart(summary, within(periods, since), days, t("chart.title_recent", window=window_text()), day_start)
         if png is None:
             return t("report.no_data")
         return Photo(png, t("bot.chart_caption", time=f"{now:%H:%M}"), filename="chart.png")
@@ -237,11 +315,14 @@ class Notifier:
         status = self.status
         if status.current is None:
             return t("bot.no_data")
+        lines = []
+        if self.clock() - status.time > CAMERA_SILENT:
+            lines.append(t("bot.camera_silent", time=f"{status.time:%H:%M}"))
         side = status.current.side
         if side in (Side.LEFT, Side.RIGHT):
-            lines = [t("bot.now_side", side=side_label(side), duration=fmt_duration(status.stint))]
+            lines.append(t("bot.now_side", side=side_label(side), duration=fmt_duration(status.stint)))
         else:
-            lines = [t(f"bot.now_{side.value}")]
+            lines.append(t(f"bot.now_{side.value}"))
         if status.totals:
             lines.append(
                 t(
@@ -255,61 +336,56 @@ class Notifier:
             lines.append(t("bot.turn", turn=side_label(status.due.turn_to)))
         elif side in (Side.LEFT, Side.RIGHT):
             lines.append(t("bot.ok"))
-        if side != Side.ABSENT:
-            now = status.time or datetime.now()
-            line = sleep_line(self._activity(now - SLEEP_LOOKBACK, now), self.cfg.sleep, now)
-            if line:
-                lines.append(line)
+        if status.asleep:
+            lines.append(status.asleep)
         return "\n".join(lines + self.climate_lines())
 
     def climate_lines(self) -> list[str]:
         """Readings with the battery, the alarm if there is one, and what to do about the heat or
-        the humidity."""
+        the humidity. The readings are the alarm's own, the ones the picture shows too."""
         thermometers = self.cfg.thermometers
         if not thermometers.devices:
             return []
-        storage = Storage(self.cfg.storage.db_path)
-        try:
-            readings = storage.latest_climate()
-        finally:
-            storage.close()
-        now = datetime.now()
+        if self.climate is not None:
+            readings = self.climate.readings()
+        else:  # no run going on: what it saved
+            storage = Storage(self.cfg.storage.db_path)
+            try:
+                readings = storage.latest_climate()
+            finally:
+                storage.close()
+        now = self.clock()
         lines = climate_lines(thermometers.devices, readings, now, thermometers.every_minutes,
                               thermometers.low_battery_volts, battery=True)
         if self.climate is not None:
             lines += self.climate.status_lines()
         return lines + tip_lines(thermometers.devices, readings, thermometers.limits, now, thermometers.every_minutes)
 
-    def _activity(self, since: datetime, until: datetime) -> list:
-        storage = Storage(self.cfg.storage.db_path)
-        try:
-            return storage.activity(since, until)
-        finally:
-            storage.close()
-
     def sleep_text(self) -> str:
-        now = self.status.time or datetime.now()
+        now = self.clock()
         _, periods, activity, since = self._recent(now)
         if not periods:
             return no_sleep_text(activity)
-        total = sum((p.end - max(p.start, since)).total_seconds() for p in periods)
+        inside = within(periods, since)
         lines = [
             t(
                 "bot.sleep",
-                total=fmt_duration(total),
+                window=window_text(),
+                total=fmt_duration(sum(p.seconds for p in inside)),
                 count=len(periods),
-                longest=fmt_duration(max(p.seconds for p in periods)),
+                longest=fmt_duration(max(p.seconds for p in inside)),
             )
         ]
         return "\n".join(lines + period_lines(periods, now))
 
     def stats_text(self) -> str:
-        now = self.status.time or datetime.now()
+        now = self.clock()
         s, periods, _, since = self._recent(now)
         if s is None:
             return t("report.no_data")
         text = t(
             "bot.stats",
+            window=window_text(),
             left=fmt_duration(s.totals[Side.LEFT]),
             left_pct=f"{s.share(Side.LEFT):.0%}",
             right=fmt_duration(s.totals[Side.RIGHT]),
@@ -320,16 +396,16 @@ class Notifier:
             turns=s.turns,
         )
         if periods:
-            total = sum((p.end - max(p.start, since)).total_seconds() for p in periods)
+            total = sum(p.seconds for p in within(periods, since))
             text += "\n" + t("bot.stats_sleep", total=fmt_duration(total), count=len(periods))
         return text
+
 
 def load_history(storage: Storage, cfg: Config, until: datetime) -> list[Segment]:
     """Segments from the last window_hours in the database, smoothed as in the report, so that
     after a restart the program remembers how long the head has already been on each side."""
     since = until - timedelta(hours=cfg.alerts.window_hours)
-    samples = reclassify(storage.samples(since, until), cfg.head.center_threshold)
-    return build_segments(samples, cfg.tracking.confirm_seconds, cfg.tracking.gap_seconds)
+    return segments(storage.samples(since, until), cfg)
 
 
 def monitor_from_config(cfg: Config) -> BalanceMonitor:

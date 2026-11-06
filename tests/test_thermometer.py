@@ -202,9 +202,9 @@ def test_a_thermometer_that_does_not_answer_is_logged_once(tmp_path, monkeypatch
     for _ in range(3):
         asyncio.run(poller._read_all(storage))
     warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
-    assert warnings == ["Thermometer Crib did not answer (LookupError: not seen in 60 s). Trying again every 10 min"]
-    assert "Thermometer Crib answers again" in caplog.text
-    assert poller.latest[CRIB].temperature == 21.5 and storage.latest_climate()[CRIB].temperature == 21.5
+    assert warnings == ['Thermometer "Crib" did not answer (LookupError: not seen in 60 s). Trying again every 10 min']
+    assert 'Thermometer "Crib" answers again' in caplog.text
+    assert storage.latest_climate()[CRIB].temperature == 21.5
     assert told == [("no_answer", "Crib"), ("no_answer", "Crib"), ("reading", "Crib", 21.5)]
     storage.close()
 

@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
+import types
+import typing
 from dataclasses import dataclass, field, fields, is_dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -134,8 +137,8 @@ class SleepConfig:
     wake_window_minutes: int = 10
     # Out of the crib only after this many minutes in a row without the baby. Above 1, a minute or
     # two in which the network lost a still baby (a white sleep sack in daylight) does not end the
-    # sleep. Off by default: in an empty crib the network finds "people" in the sheet's pattern,
-    # those frames look still, and joined with the short gaps between them they made up sleep.
+    # sleep. 1 by default: in an empty crib the network found "people" in the sheet's pattern, those
+    # frames looked still, and joined with the short gaps between them they made up sleep.
     out_minutes: int = 1
 
 
@@ -198,6 +201,8 @@ class ColdAlarmConfig:
     # every_minutes instead of thermometers.every_minutes, so the alarm follows the temperature.
     every_minutes: float = 2
     close_degrees: float = 1.0
+    # How often the quiet beep sounds before the alarm.
+    quiet_every_seconds: float = 60
     # macOS system sounds (Tink, Sosumi, Funk...) or sound files, with volume 0..1.
     quiet_sound: str = "Tink"
     quiet_volume: float = 0.3
@@ -244,18 +249,86 @@ class Config:
     thermometers: ThermometersConfig = field(default_factory=ThermometersConfig)
 
 
+def _fits(value: Any, hint: Any) -> bool:
+    """Whether a value from the YAML suits an option's type. A number in quotes, or "yes" where a
+    number goes, would otherwise get through and fail only where the option is first used, which
+    for the cold alarm is in the middle of a cold night."""
+    origin = typing.get_origin(hint)
+    if origin in (typing.Union, types.UnionType):
+        return any(_fits(value, h) for h in typing.get_args(hint))
+    if hint is type(None):
+        return value is None
+    if hint is bool:
+        return isinstance(value, bool)
+    if hint in (int, float):
+        # YAML reads 10 as an int, so a float option takes one too. A bool is an int in Python.
+        return not isinstance(value, bool) and isinstance(value, int if hint is int else (int, float))
+    if hint is str:
+        return isinstance(value, str)
+    if origin is list:
+        args = typing.get_args(hint)
+        return isinstance(value, list) and (not args or all(_fits(v, args[0]) for v in value))
+    if origin is dict:
+        return isinstance(value, dict)
+    return True  # a thermometer and the like: checked where it is built
+
+
 def _apply(obj: Any, data: dict[str, Any], path: str = "") -> None:
     known = {f.name for f in fields(obj)}
+    hints = typing.get_type_hints(type(obj))
     for key, value in data.items():
         if key not in known:
             raise ValueError(t("err.unknown_option", key=f"{path}{key}"))
         current = getattr(obj, key)
         if is_dataclass(current):
+            if value is None:  # a section with everything in it commented out
+                continue
             if not isinstance(value, dict):
                 raise ValueError(t("err.not_section", key=f"{path}{key}"))
             _apply(current, value, f"{path}{key}.")
+        elif not _fits(value, hints[key]):
+            raise ValueError(t("err.bad_value", key=f"{path}{key}", value=value))
         else:
             setattr(obj, key, value)
+
+
+# Options where 0 or less would stop the program from working, for example read the thermometers
+# in a tight loop with no pause.
+POSITIVE = (
+    "camera.sample_fps",
+    "thermometers.every_minutes",
+    "thermometers.scan_seconds",
+    "thermometers.lost_minutes",
+    "thermometers.tips_every_hours",
+    "thermometers.cold.check_minutes",
+    "thermometers.cold.repeat_minutes",
+    "thermometers.cold.snooze_minutes",
+    "thermometers.cold.every_minutes",
+    "thermometers.cold.quiet_every_seconds",
+)
+
+
+def _check(cfg: Config) -> None:
+    """Values of the right type that still make no sense: caught at the start, not mid-night."""
+    if cfg.camera.rotate not in (0, 90, 180, 270):
+        raise ValueError(t("err.rotate"))
+    roi = cfg.camera.roi
+    if roi is not None and not (len(roi) == 4 and 0 <= roi[0] < roi[2] <= 1 and 0 <= roi[1] < roi[3] <= 1):
+        raise ValueError(t("err.roi"))
+    if cfg.head.fallback_head_direction not in ("up", "down", "left", "right"):
+        raise ValueError(t("err.fallback_direction"))
+    from .report import parse_day_start  # the one parser of it, so what passes here works there
+
+    try:
+        parse_day_start(cfg.tracking.day_starts_at)
+    except ValueError:
+        raise ValueError(t("err.day_start")) from None
+    for key in POSITIVE:
+        value: Any = cfg
+        for part in key.split("."):
+            value = getattr(value, part)
+        if value <= 0:
+            raise ValueError(t("err.positive", key=key))
 
 
 def load_dotenv(path: str | Path) -> None:
@@ -277,12 +350,26 @@ def load_dotenv(path: str | Path) -> None:
             os.environ.setdefault(key, value)
 
 
+def language_of(path: str | Path) -> str:
+    """The language a config file asks for, read before the rest of it is checked, so that what
+    is wrong in it is said in that language. "en" when it cannot be read."""
+    try:
+        data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return "en"
+    language = data.get("language") if isinstance(data, dict) else None
+    return language if isinstance(language, str) else "en"
+
+
 def load_config(path: str | Path | None) -> Config:
     cfg = Config()
     if path is not None:
         data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+        if not isinstance(data, dict):
+            raise ValueError(t("err.not_config", path=path))
         _apply(cfg, data)
     cfg.thermometers.devices = _thermometers(cfg.thermometers.devices)
+    _check(cfg)
     return cfg
 
 
@@ -307,7 +394,11 @@ def _thermometers(items: Any) -> list[Thermometer]:
             wrong = not isinstance(value, bool) if key == "alarm" else isinstance(value, bool) or not isinstance(value, (int, float))
             if wrong:
                 raise ValueError(t("err.thermometer_value", key=f"thermometers.devices.{i + 1}.{key}"))
-        devices.append(Thermometer(item["address"].strip(), str(item.get("name") or "").strip(), limits))
+        # Bluetooth addresses are written in capitals, by bleak too; "ab:cd" and "AB:CD" are one.
+        address = item["address"].strip().upper()
+        if any(device.address == address for device in devices):
+            raise ValueError(t("err.thermometer_twice", key=f"thermometers.devices.{i + 1}", address=address))
+        devices.append(Thermometer(address, str(item.get("name") or "").strip(), limits))
     return devices
 
 
@@ -349,4 +440,10 @@ def save_thermometers(path: str | Path, devices: list[Thermometer]) -> None:
     saved = _thermometers((yaml.safe_load(text) or {}).get("thermometers", {}).get("devices"))
     if saved != devices:  # the file had an unusual layout: better to say so than to write it wrong
         raise ValueError(t("err.thermometers_save", path=path))
-    path.write_text(text, encoding="utf-8")
+    # Through a temporary file: the config holds the camera password and the bot token, and a
+    # crash in the middle of writing must not leave half of it.
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(text, encoding="utf-8")
+    if path.exists():
+        shutil.copymode(path, temporary)
+    os.replace(temporary, path)

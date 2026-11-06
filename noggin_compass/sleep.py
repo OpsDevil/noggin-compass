@@ -23,8 +23,9 @@ MIN_FRAMES = 5
 # end a sleep: if the baby woke up meanwhile, the restless minutes after it show that. A longer
 # one ends the sleep where the data stopped: we don't know what happened.
 MAX_GAP = timedelta(minutes=30)
-# Without movement data this recent, the bot does not say whether the baby is asleep.
-RECENT = timedelta(minutes=5)
+# Movement data this recent counts as now: older, and nothing is said about whether the baby is
+# asleep right now, nor is a sleep shown as going on.
+FRESH = timedelta(minutes=2)
 
 
 class Minute(StrEnum):
@@ -108,6 +109,9 @@ def find_sleep(samples: list[tuple[datetime, Side, float | None]], cfg: SleepCon
             periods.append(SleepPeriod(asleep, at, ongoing))
         asleep = None
         restless.clear()
+        # The still minutes before waking belong to the sleep that just ended: counted again,
+        # they could date the next sleep before this wake and merge the two into one.
+        recent.clear()
 
     for minute in sorted(minutes):
         kind = minutes[minute]
@@ -164,6 +168,12 @@ class SleepDay:
         return max((p.seconds for p in self.periods), default=0.0)
 
 
+def within(periods: list[SleepPeriod], since: datetime) -> list[SleepPeriod]:
+    """What of each period falls after `since`: for the totals and the longest of a window, so a
+    sleep that began before it counts only its part inside."""
+    return [SleepPeriod(max(p.start, since), p.end, p.ongoing, p.manual) for p in periods if p.end > since]
+
+
 def with_naps(periods: list[SleepPeriod], naps: list[SleepPeriod]) -> list[SleepPeriod]:
     """Sleep the camera found plus the naps the parents entered, in time order. Overlapping ones
     become one sleep, so a nap entered for a sleep the camera also saw, or entered twice, is not
@@ -195,7 +205,7 @@ def period_lines(periods: list[SleepPeriod], now: datetime | None = None) -> lis
     for p in periods:
         line = t(
             # A sleep cut off by the end of old data is not "now".
-            "sleep.ongoing" if p.ongoing and now - p.end <= 2 * MINUTE else "sleep.period",
+            "sleep.ongoing" if p.ongoing and now - p.end <= FRESH else "sleep.period",
             start=f"{p.start:%H:%M}",
             end=f"{p.end:%H:%M}",
             duration=fmt_duration(p.seconds),
@@ -235,10 +245,10 @@ def sleep_state(
     Recent means a minute that could be classified: a baby in the crib whom the pose model lost
     gives a few movement values a minute at best, which says nothing about sleep."""
     known = [m for m, kind in classify_minutes(samples, cfg).items() if kind != Minute.MISSING]
-    if not known or now - (max(known) + MINUTE) > 2 * MINUTE:
+    if not known or now - (max(known) + MINUTE) > FRESH:
         return None, None
     periods = find_sleep(samples, cfg)
-    if periods and periods[-1].ongoing and now - periods[-1].end <= 2 * MINUTE:
+    if periods and periods[-1].ongoing and now - periods[-1].end <= FRESH:
         return True, periods[-1]
     return False, None
 

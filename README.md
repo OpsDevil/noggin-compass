@@ -236,7 +236,8 @@ stays on that side. The numbers above are an example; agree on the limits with y
 **Telegram.** Alerts can also go to Telegram, and the bot answers `/now` (where the head is, whether
 it is time to turn and whether the baby is asleep), and over the last 24 hours `/stats` (time per
 side), `/sleep` (sleep, see [Sleep](#sleep)) and `/chart` (a chart like `report --chart`). With
-`/nap` and `/naps`, parents log sleep the camera cannot see, see [Sleep](#sleep):
+`/nap` and `/naps`, parents log sleep the camera cannot see, see [Sleep](#sleep). When the camera
+has sent nothing for over 2 minutes, `/now` says so first. To set it up:
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and store its token in the macOS Keychain
    (the command asks for the token and does not echo it):
@@ -320,7 +321,8 @@ Which ones to read? Numbers separated by spaces, Enter to keep the current choic
 
 Enter the number of the one in the crib, or several numbers: then the program asks for a name for
 each, and the readings are shown by name. The choice goes into the `thermometers` section of
-`config.yaml`, the rest of the file stays as it was. Restart `noggin-compass run` to start reading.
+`config.yaml`, the rest of the file stays as it was (comments inside the `devices` list are not
+kept). Restart `noggin-compass run` to start reading.
 
 * **How it reads.** The thermometer broadcasts its readings encrypted with a key from the Xiaomi
   account, but to a client that connects it sends them in the open. So every
@@ -348,15 +350,18 @@ each, and the readings are shown by name. The choice goes into the `thermometers
 For a window or a door left open at night. When a thermometer shows less than
 `thermometers.limits.cold_below` (18 °C):
 
-1. A quiet beep on the computer running the program once a minute, and one Telegram message:
+1. A quiet beep on the computer running the program once a minute (`quiet_every_seconds`), and
+   one Telegram message:
    "Crib: 17.8 °C, colder than 18 °C. Check the windows and the door. If it is not warmer in 10 min,
    the alarm goes off." From then on the thermometers are read every 2 minutes.
 2. If after 10 minutes it is not warmer, the alarm: a loud sound with no pause, a notification on
    the computer and a Telegram message with a **Turn off** button every 2 minutes. If the
    temperature falls by another degree before the 10 minutes are up, the alarm starts at once.
    If it is getting warmer by itself, the quiet beeping goes on for another 10 minutes instead.
-3. **Turn off** silences the alarm for 20 minutes. If by then it is not warmer, the alarm comes back.
-4. Once it is above `cold_below` again, it all ends, and Telegram says so without a sound.
+3. **Turn off** silences the alarm for 20 minutes. If by then it is not warmer, the alarm comes back;
+   if it is getting warmer but is still cold, the quiet beeping goes on instead.
+4. Once it is `warming_degrees` (0.3 °C) above `cold_below`, it all ends, and Telegram says so
+   without a sound. The margin keeps a reading that wobbles around the limit from ending it.
 
 `/now` says what the alarm is doing. The sounds play on the computer, so keep its volume up. The
 times and the sounds are in `thermometers.cold`.
@@ -395,7 +400,9 @@ The menu keeps them when the choice is changed. Restart `noggin-compass run` aft
 ## Configuration
 
 All options with their defaults are in [`config.example.yaml`](config.example.yaml); copy it to
-`config.yaml` and keep only what you change.
+`config.yaml` and keep only what you change. A value of the wrong kind (a number in quotes, `yes`
+where a number goes, a crop outside the frame) stops the program at the start with the option's
+name, rather than at night when the option is first used.
 
 | Option | Default | What it does |
 |---|---|---|
@@ -450,7 +457,7 @@ All options with their defaults are in [`config.example.yaml`](config.example.ya
 | `storage.db_path` | `data/noggin-compass.db` | SQLite file with the per-second results. |
 | `storage.snapshots_dir` | `data/snapshots` | Where snapshots are saved. |
 | `storage.snapshot_every_seconds` | `0` (off) | Every N seconds saves the frame and a line in `analysis.jsonl` with all keypoints and the score. Use it to check the accuracy by eye, to recompute statistics later without running the network again, or to train a model of your own. To see what was detected on a snapshot, `uv run noggin-compass draw data/snapshots/2026-11-05/0812*.jpg` draws the points on a copy, as in the preview window. A frame takes about 500 KB, so one every 10 s is about 4 GB a day. |
-| `thermometers.devices` | `[]` | The thermometers to read, each with an `address` and an optional `name`. Easiest to fill in with `noggin-compass thermometer`, see [Thermometer](#thermometer). The name is shown only when there are several. |
+| `thermometers.devices` | `[]` | The thermometers to read, each with an `address` and an optional `name`. Easiest to fill in with `noggin-compass thermometer`, see [Thermometer](#thermometer). With one thermometer the lines in `/now` and on the preview go without the name; messages and the log use it whenever it is set. |
 | `thermometers.every_minutes` | `10` | How often to read the thermometers. Each reading connects for about 10 s, which costs the coin cell more than the thermometer's own work, so do not go much lower: the room temperature changes slowly anyway. |
 | `thermometers.scan_seconds` | `90` | How long to look for a thermometer before each reading. It advertises every few seconds, and with a weak signal many are lost: one of ours took 47 s to be seen. The search ends as soon as it is seen, so a longer value costs nothing. Raise it if the log often says a thermometer was not seen. |
 | `thermometers.low_battery_volts` | `2.5` | Below this voltage `/now` and Telegram say the battery runs low. A new CR2032 gives about 3.0 V, and the thermometer stops working at about 2.2 V. |
@@ -468,6 +475,7 @@ All options with their defaults are in [`config.example.yaml`](config.example.ya
 | `thermometers.cold.colder_degrees` | `1.0` | Falling this much below where the cold began starts the alarm at once, without waiting `check_minutes`. |
 | `thermometers.cold.every_minutes` | `2` | How often to read the thermometers while it is colder than `cold_below` + `close_degrees`, so the alarm follows the temperature. Costs battery, but only on cold nights. |
 | `thermometers.cold.close_degrees` | `1.0` | See `every_minutes` above. |
+| `thermometers.cold.quiet_every_seconds` | `60` | How often the quiet beep sounds before the alarm. |
 | `thermometers.cold.quiet_sound`, `quiet_volume` | `Tink`, `0.3` | The quiet beep: a macOS system sound (Tink, Ping, Sosumi, Funk...) or a sound file, and its volume 0..1. |
 | `thermometers.cold.alarm_sound`, `alarm_volume` | `Sosumi`, `1.0` | The alarm sound and its volume. |
 

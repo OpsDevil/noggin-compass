@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -13,12 +14,12 @@ import cv2
 import numpy as np
 
 from .chart import day_label, render_chart
-from .config import Config, DetectorConfig, load_config, load_dotenv
+from .config import Config, DetectorConfig, language_of, load_config, load_dotenv
 from .head import HeadEstimate, Side, estimate_head, side_label
 from .i18n import LANGUAGES, set_language, t
 from .motion import MotionMeter
 from .naps import periods as nap_periods
-from .notify import Notifier, load_history, mac_notification, monitor_from_config
+from .notify import Notifier, check_sounds, load_history, monitor_from_config
 from .pose import Person, PoseDetector
 from .preview import Frame, corner_notes, fit, picture
 from .report import build_report, day_bounds, day_of, fmt_duration, parse_day_start, render
@@ -34,7 +35,10 @@ if TYPE_CHECKING:
 log = logging.getLogger("noggin_compass")
 
 STATUS_EVERY_SECONDS = 60
-SLEEP_EVERY_SECONDS = 60  # how often to work out whether the baby is asleep, for the picture
+SLEEP_EVERY_SECONDS = 60  # how often to work out whether the baby is asleep, for /now and the picture
+# A frame that fails is logged with its traceback at most this often, so a broken night does not
+# fill the log with the same one.
+FAILURE_LOG_SECONDS = 60
 PREVIEW_WINDOW = "noggin-compass"
 
 
@@ -135,25 +139,30 @@ def run(cfg: Config, args: argparse.Namespace) -> None:
         from .presence import start
 
         presence = start(cfg.presence.model, cfg.detector.device, cfg.presence.threshold, cfg.presence.every_seconds)
+    check_sounds(cfg)
+    # The main connection first: it creates or updates the tables before any thread opens its own.
+    storage = Storage(cfg.storage.db_path)
     notifier = Notifier(cfg)
-    thermometers = siren = None
+    thermometers = siren = watch = None
     if cfg.thermometers.devices:
         from .climate import ClimateWatch, Siren
 
-        watch = ClimateWatch(cfg.thermometers, send=notifier.send, notify=mac_notification)
+        watch = ClimateWatch(cfg.thermometers, send=notifier.send, notify=notifier.notify)
+        # The last saved readings, so /now and the preview show them from the first second.
+        watch.remember(storage.latest_climate())
         notifier.climate = watch
         thermometers = ThermometerPoller(cfg.thermometers.devices, cfg.storage.db_path,
                                          cfg.thermometers.every_minutes, cfg.thermometers.scan_seconds, watch)
         siren = Siren(watch, cfg.thermometers.cold)
-        watch.start()
-        thermometers.start()
-        siren.start()
-    storage = Storage(cfg.storage.db_path)
     tracker = SideTracker(cfg.tracking.confirm_seconds, cfg.tracking.gap_seconds)
     motion_meter = MotionMeter()
     monitor = monitor_from_config(cfg)
     notifier.start()
+    if thermometers is not None:
+        thermometers.start()
+        siren.start()
     last_status = last_snapshot = last_sleep = 0.0
+    failed_at = None
     asleep_note = None
     history_loaded = False
 
@@ -161,44 +170,52 @@ def run(cfg: Config, args: argparse.Namespace) -> None:
                quit=t("cli.quit_preview") if args.preview else ""))
     try:
         for ts, frame in source.frames(cfg.camera.sample_fps):
-            if not history_loaded:
-                monitor.add(load_history(storage, cfg, until=ts))
-                history_loaded = True
-            frame = preprocess(frame, cfg.camera.rotate, cfg.camera.roi)
-            estimate, person = analyze(detector, frame, cfg, ts.timestamp(), presence)
-            motion = motion_meter.update(frame, None if person is None else person.box, ts.timestamp())
-            storage.add(ts, estimate, motion)
-            monitor.add(tracker.update(ts, estimate.side))
-            current = tracker.current
-            now = ts.timestamp()
+            try:
+                if not history_loaded:
+                    monitor.add(load_history(storage, cfg, until=ts))
+                    history_loaded = True
+                frame = preprocess(frame, cfg.camera.rotate, cfg.camera.roi)
+                estimate, person = analyze(detector, frame, cfg, ts.timestamp(), presence)
+                motion = motion_meter.update(frame, None if person is None else person.box, ts.timestamp())
+                storage.add(ts, estimate, motion)
+                monitor.add(tracker.update(ts, estimate.side))
+                current = tracker.current
+                now = ts.timestamp()
 
-            alert = monitor.check(ts, current)
-            if alert is not None:
-                notifier.alert(alert)
-            notifier.update(ts, current, monitor)
-            if now - last_sleep >= SLEEP_EVERY_SECONDS:
-                last_sleep = now
-                asleep_note = None if current.side == Side.ABSENT else sleep_line(
-                    storage.activity(ts - SLEEP_LOOKBACK, ts), cfg.sleep, ts)
-            readings = {} if thermometers is None else thermometers.latest
-            shot = Frame(frame, person, estimate, ts, corner_notes(asleep_note, cfg, readings, datetime.now()))
-            notifier.set_frame(shot)
+                if now - last_sleep >= SLEEP_EVERY_SECONDS:
+                    last_sleep = now
+                    asleep_note = None if current.side == Side.ABSENT else sleep_line(
+                        storage.activity(ts - SLEEP_LOOKBACK, ts), cfg.sleep, ts)
+                alert = monitor.check(ts, current)
+                if alert is not None:
+                    notifier.alert(alert)
+                notifier.update(ts, current, monitor, asleep_note)
+                readings = {} if watch is None else watch.readings()
+                shot = Frame(frame, person, estimate, ts, corner_notes(asleep_note, cfg, readings, datetime.now()))
+                notifier.set_frame(shot)
 
-            if now - last_status >= STATUS_EVERY_SECONDS:
-                last_status = now
-                score = f"{estimate.score:+.2f}" if estimate.score is not None else "-"
-                log.info(t("cli.status", time=f"{ts:%H:%M:%S}", side=side_label(estimate.side),
-                           score=score, method=estimate.describe(),
-                           confirmed=side_label(current.side), duration=fmt_duration(current.seconds)))
+                if now - last_status >= STATUS_EVERY_SECONDS:
+                    last_status = now
+                    score = f"{estimate.score:+.2f}" if estimate.score is not None else "-"
+                    log.info(t("cli.status", time=f"{ts:%H:%M:%S}", side=side_label(estimate.side),
+                               score=score, method=estimate.describe(),
+                               confirmed=side_label(current.side), duration=fmt_duration(current.seconds)))
 
-            snapshot_due = (
-                cfg.storage.snapshot_every_seconds
-                and now - last_snapshot >= cfg.storage.snapshot_every_seconds
-            )
-            if snapshot_due:
-                last_snapshot = now
-                save_snapshot(shot, cfg.storage.snapshots_dir, cfg.detector, motion,
-                              presence.last_score if presence else None)
+                snapshot_due = (
+                    cfg.storage.snapshot_every_seconds
+                    and now - last_snapshot >= cfg.storage.snapshot_every_seconds
+                )
+                if snapshot_due:
+                    last_snapshot = now
+                    save_snapshot(shot, cfg.storage.snapshots_dir, cfg.detector, motion,
+                                  presence.last_score if presence else None)
+            except Exception:
+                # One bad frame (a model error, a broken picture from the camera) must not end
+                # the watch for the rest of the night: log it and go on with the next one.
+                if failed_at is None or time.monotonic() - failed_at >= FAILURE_LOG_SECONDS:
+                    failed_at = time.monotonic()
+                    log.exception(t("cli.frame_failed"))
+                continue
             if args.preview:
                 cv2.imshow(PREVIEW_WINDOW, fit(picture(shot, cfg)))
                 if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
@@ -208,7 +225,6 @@ def run(cfg: Config, args: argparse.Namespace) -> None:
     finally:
         if siren is not None:
             siren.stop()
-            watch.stop()
         if thermometers is not None:
             thermometers.stop()
         notifier.stop()
@@ -231,8 +247,8 @@ def report(cfg: Config, args: argparse.Namespace) -> None:
     try:
         samples = storage.samples(since, until)
         # From 12 hours earlier, so that a sleep that began before the first day is recognised.
-        activity = storage.activity(since - timedelta(hours=12), until)
-        naps = nap_periods(storage, since - timedelta(hours=12), until)
+        activity = storage.activity(since - SLEEP_LOOKBACK, until)
+        naps = nap_periods(storage, since - SLEEP_LOOKBACK, until)
     finally:
         storage.close()
     summaries = build_report(
@@ -267,7 +283,13 @@ def load_snapshot(path: Path, cfg: Config) -> Frame:
     analysis = path.parent / "analysis.jsonl"
     if analysis.exists():
         with open(analysis, encoding="utf-8") as lines:
-            record = next((r for r in map(json.loads, lines) if r["file"] == path.name), None)
+            for line in lines:
+                try:
+                    found = json.loads(line)
+                except json.JSONDecodeError:  # a line cut short when the program was stopped
+                    continue
+                if found.get("file") == path.name:
+                    record = found  # the last one: a restart within the same second wrote the file again
     if record is None:
         raise SystemExit(t("cli.draw.no_record", path=path))
     method, _, axis_source = record["method"].partition("/")
@@ -340,7 +362,12 @@ def main(argv: list[str] | None = None) -> None:
     known, _ = early.parse_known_args(argv)
     config_path = Path(known.config)
     load_dotenv(config_path.parent / ".env")
-    cfg = load_config(config_path if config_path.exists() else None)
+    # The config's own language before checking it, so what is wrong in it is said in that language.
+    set_language(known.lang or (language_of(config_path) if config_path.exists() else "en"))
+    try:
+        cfg = load_config(config_path if config_path.exists() else None)
+    except ValueError as error:
+        raise SystemExit(f"{config_path}: {error}") from None
     set_language(known.lang or cfg.language)
 
     parser = build_parser()

@@ -57,6 +57,17 @@ def reclassify(
     ]
 
 
+def segments_from(
+    samples: list[tuple[datetime, Side, float | None]],
+    center_threshold: float,
+    confirm_seconds: float,
+    gap_seconds: float,
+) -> list[Segment]:
+    """Stored samples to confirmed segments, the scores classified with today's center_threshold.
+    The report, the bot, the chart and the restart all count head time from this one place."""
+    return build_segments(reclassify(samples, center_threshold), confirm_seconds, gap_seconds)
+
+
 def split_by_day(segments: list[Segment], day_start: time) -> dict[date, list[Segment]]:
     days: dict[date, list[Segment]] = defaultdict(list)
     for seg in segments:
@@ -90,7 +101,7 @@ def build_report(
     gap_seconds: float,
     day_start: time,
 ) -> list[DaySummary]:
-    segments = build_segments(reclassify(samples, center_threshold), confirm_seconds, gap_seconds)
+    segments = segments_from(samples, center_threshold, confirm_seconds, gap_seconds)
     return [summarize(day, segs) for day, segs in sorted(split_by_day(segments, day_start).items())]
 
 

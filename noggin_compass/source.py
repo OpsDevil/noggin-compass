@@ -63,6 +63,10 @@ class LiveSource:
 
     STALE_AFTER = 5.0
     RECONNECT_DELAY = 5.0
+    # A camera that drops off the Wi-Fi without closing the connection would leave read() waiting
+    # for a long time; give up after this and reconnect.
+    OPEN_TIMEOUT_MS = 15000
+    READ_TIMEOUT_MS = 10000
 
     def __init__(self, source: str | int, label: str | int | None = None):
         self.source = _parse_source(source)
@@ -80,7 +84,9 @@ class LiveSource:
             return cv2.VideoCapture(self.source)
         # Only ffmpeg: when it can't connect, OpenCV would otherwise try to read the URL as an image
         # sequence and print it, password included, to stderr.
-        cap = cv2.VideoCapture(self.source, cv2.CAP_FFMPEG)
+        timeouts = [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, self.OPEN_TIMEOUT_MS, cv2.CAP_PROP_READ_TIMEOUT_MSEC,
+                    self.READ_TIMEOUT_MS]
+        cap = cv2.VideoCapture(self.source, cv2.CAP_FFMPEG, timeouts)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         return cap
 
@@ -101,6 +107,7 @@ class LiveSource:
     def frames(self, sample_fps: float) -> Iterator[tuple[datetime, Frame]]:
         period = 1.0 / sample_fps
         next_tick = time.time()
+        last = 0.0
         while self._running:
             next_tick += period
             delay = next_tick - time.time()
@@ -110,8 +117,11 @@ class LiveSource:
                 next_tick = time.time()
             with self._lock:
                 frame, frame_time = self._frame, self._frame_time
-            if frame is None or time.time() - frame_time > self.STALE_AFTER:
+            # A frame already handed out is skipped: while the camera stalls it would be analysed
+            # again under the same time, stored twice, and its zero motion taken for a still baby.
+            if frame is None or frame_time == last or time.time() - frame_time > self.STALE_AFTER:
                 continue
+            last = frame_time
             yield datetime.fromtimestamp(frame_time), frame
 
     def close(self) -> None:

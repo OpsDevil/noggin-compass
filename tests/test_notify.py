@@ -47,7 +47,7 @@ class FakeTelegram:
 
 @pytest.fixture(autouse=True)
 def quiet(monkeypatch):
-    monkeypatch.setattr(notify, "play_sound", lambda sound: None)
+    monkeypatch.setattr(notify, "play", lambda sound, volume=1.0, times=1: None)
     monkeypatch.setattr(notify, "mac_notification", lambda text: None)
     monkeypatch.delenv(telegram.TOKEN_ENV, raising=False)
     monkeypatch.delenv(telegram.CHAT_IDS_ENV, raising=False)
@@ -121,6 +121,7 @@ def test_now_and_stats_commands(tmp_path):
     monitor = notify.monitor_from_config(cfg)
     current = Segment(Side.RIGHT, T0, T0 + timedelta(hours=3, minutes=5))
     notifier.update(current.end, current, monitor)
+    notifier.clock = lambda: current.end
 
     now = notifier.handle_command("/now")
     assert "turned right, on this side for 3 h 05 min" in now
@@ -212,6 +213,7 @@ def test_chart_command(tmp_path):
     cfg.storage.db_path = str(tmp_path / "db.sqlite")
     notifier = notify.Notifier(cfg)
     notifier.status = notify.Status(time=T0 + timedelta(hours=1))
+    notifier.clock = lambda: T0 + timedelta(hours=1)
     assert notifier.handle_command("/chart") == "No data yet."
     storage = Storage(cfg.storage.db_path)
     for i in range(0, 3600, 5):
@@ -244,6 +246,7 @@ def test_bot_answers_about_the_last_24_hours(tmp_path):
     storage.close()
     notifier = notify.Notifier(cfg)
     notifier.status = notify.Status(time=T0 + timedelta(minutes=30))
+    notifier.clock = lambda: T0 + timedelta(minutes=30)
     stats = notifier.stats_text()
     assert stats.startswith("Last 24 hours:\nleft 30 min (100%)\nright 0 s")
     assert "sleep 30 min, sleeps: 1" in stats
@@ -296,6 +299,7 @@ def test_naps_count_in_sleep_and_stats(tmp_path):
         storage.close()
         notifier = notify.Notifier(cfg)
         notifier.status = notify.Status(time=T0 + timedelta(minutes=30))
+        notifier.clock = lambda: T0 + timedelta(minutes=30)
         assert notifier.sleep_text().split("\n") == [
             "Сон за последние 24 часа: 2 ч 00 мин, засыпаний: 2, самый долгий: 1 ч 30 мин",
             "14:00-15:30  1 ч 30 мин (вне кроватки)",

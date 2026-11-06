@@ -266,7 +266,7 @@ def test_the_siren_beeps_quietly_once_a_minute_and_loudly_without_a_pause():
         return len(played) >= 3 or len(calls) > 200
 
     watch = Watch()
-    siren = Siren(watch, ThermometersConfig().cold, play=lambda sound, volume: played.append((sound, volume)))
+    siren = Siren(watch, ThermometersConfig().cold, sound=lambda sound, volume: played.append((sound, volume)))
     siren._stop.wait = wait
     siren._run()
     assert played[0] == ("Tink", 0.3) and len(played) == 1  # one quiet beep, the next only in a minute
@@ -325,11 +325,32 @@ def test_a_thermometer_silent_in_the_cold_raises_the_alarm():
     night = Night()
     night.read(17.5)
     night.take()
-    night.clock.wait(14)
-    assert night.watch.tick() == "quiet"  # a reading may still be on its way
-    night.clock.wait(1)
+    night.clock.wait(10)
+    night.watch.polled(night.clock() - timedelta(minutes=1))  # began before the decision was due
+    assert night.watch.tick() == "quiet"
+    night.clock.wait(3)
+    night.watch.polled(night.clock() - timedelta(minutes=1))  # began after it, and nothing came
     assert night.watch.tick() == "alarm"
     assert night.take()[0].startswith("Alarm! Crib was 17.5 °C and has stopped answering")
+
+
+def test_a_reading_that_comes_in_time_decides_instead():
+    night = Night()
+    night.read(17.5)
+    night.clock.wait(11)
+    night.read(17.6)  # not warmer: the plain alarm, not "stopped answering"
+    night.watch.polled(night.clock() - timedelta(seconds=30))
+    assert night.watch.tick() == "alarm"
+    assert night.take()[-1].startswith("Alarm, it is cold! Crib: 17.6 °C")
+
+
+def test_without_finished_polls_a_silent_thermometer_still_raises_the_alarm():
+    night = Night()  # Bluetooth hangs: no poll ever finishes
+    night.read(17.5)
+    night.clock.wait(10 + 3 * 3.5 - 1)
+    assert night.watch.tick() == "quiet"
+    night.clock.wait(1)
+    assert night.watch.tick() == "alarm"
 
 
 def test_after_off_a_silent_thermometer_brings_the_alarm_back():
@@ -340,9 +361,8 @@ def test_after_off_a_silent_thermometer_brings_the_alarm_back():
     night.watch.press(OFF)
     night.clock.wait(19)
     night.read(17.6)  # answered during the snooze: not enough, the decision is at 20 min
-    night.clock.wait(5)
-    assert night.watch.tick() is None
-    night.clock.wait(1)
+    night.clock.wait(3)
+    night.watch.polled(night.clock() - timedelta(minutes=1))
     assert night.watch.tick() == "alarm"
 
 
@@ -364,6 +384,8 @@ def test_one_failed_message_does_not_stop_the_others():
 def test_messages_go_out_from_their_own_thread():
     import threading
 
+    from noggin_compass.notify import Outbox
+
     got = threading.Event()
     threads = []
 
@@ -371,12 +393,13 @@ def test_messages_go_out_from_their_own_thread():
         threads.append(threading.current_thread().name)
         got.set()
 
+    outbox = Outbox()
+    outbox.start()
     night = Night()
-    night.watch.send = send
-    night.watch.start()
+    night.watch.send = lambda text, silent: outbox.put(send, text, silent)
     night.read(17.5)
-    assert got.wait(2) and threads == ["climate-messages"]
-    night.watch.stop()
+    assert got.wait(2) and threads == ["outbox"]
+    outbox.stop()
 
 
 def test_a_one_line_thermometers_section_is_left_alone(tmp_path):

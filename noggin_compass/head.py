@@ -94,6 +94,14 @@ def _body_axis(
     return np.array(_DIRECTIONS[fallback]), "config"
 
 
+def left_of(up, mirrored: bool) -> np.ndarray:
+    """Unit vector toward the baby's left shoulder, from the "up" axis (toward the top of the
+    head). The baby faces the camera, so in an unmirrored frame its left is to the right of "up";
+    a mirrored camera swaps them. The side estimate and the picture's arrow both take it from here."""
+    toward_left = np.array([-up[1], up[0]], dtype=float)
+    return -toward_left if mirrored else toward_left
+
+
 def estimate_head(
     xy: np.ndarray,
     conf: np.ndarray,
@@ -118,11 +126,7 @@ def estimate_head(
     head_center = xy[face_idx + ear_idx].mean(axis=0)
     up, axis_source = _body_axis(xy, visible, head_center, body_up, fallback_head_direction)
 
-    # Unit vector toward the baby's left shoulder. The baby faces the camera, so in an unmirrored
-    # frame its left side is to the right of the "up" axis.
-    toward_left = np.array([-up[1], up[0]])
-    if mirrored:
-        toward_left = -toward_left
+    toward_left = left_of(up, mirrored)
 
     def lat(point: np.ndarray) -> float:
         return float(np.dot(point, toward_left))

@@ -10,8 +10,6 @@ button; Off silences it for a while, and it comes back if it is still not warmer
 from __future__ import annotations
 
 import logging
-import queue
-import subprocess
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -19,14 +17,16 @@ from datetime import datetime, timedelta
 
 from .config import ColdAlarmConfig, Thermometer, ThermometersConfig
 from .i18n import t
+from .notify import play
 from .report import fmt_duration
 from .telegram import Reply
-from .thermometer import Reading, battery_percent, label, reading_text, tips
+from .thermometer import Reading, battery_percent, label, reading_text, stale, tips, who
 
 log = logging.getLogger("noggin_compass")
 
 OFF = "climate:off"  # data of the Off button
-QUIET_EVERY = 60  # seconds between quiet beeps
+# See ClimateWatch._check_silent.
+STUCK_POLLS = 3
 
 
 @dataclass
@@ -39,10 +39,11 @@ class Cold:
 
 
 class ClimateWatch:
-    """Gets each reading from the ThermometerPoller and decides what to say and what to sound.
-    `send(text, silent)` posts to Telegram; `notify(text)` shows a notification on the computer.
-    Called from the poller's, the bot's and the siren's threads, hence the lock. The messages are
-    sent after it is released: Telegram can take seconds to answer."""
+    """Gets each reading from the ThermometerPoller, keeps the latest ones (the only copy: /now,
+    the preview and the alarm all read them here) and decides what to say and what to sound.
+    `send(text, silent)` posts to Telegram and `notify(text)` shows a notification on the computer;
+    both only queue it (notify.Outbox). Called from the poller's, the bot's and the siren's
+    threads, hence the lock."""
 
     def __init__(
         self,
@@ -66,18 +67,12 @@ class ClimateWatch:
         self._tips_told: dict[tuple[str, str], datetime] = {}
         self._outbox: list[tuple[str | Reply, bool]] = []
         self._notes: list[str] = []  # for notify
+        self._polled: datetime | None = None  # start of the last poll that finished
         self._lock = threading.Lock()
-        self._mail: queue.Queue | None = None  # set by start(): messages then go out in a thread
 
-    def start(self) -> None:
-        """Send from a thread of its own from now on. Telegram can hang for half a minute without
-        a network, and the siren must not fall silent meanwhile, nor the readings stop."""
-        self._mail = queue.Queue()
-        threading.Thread(target=self._post, name="climate-messages", daemon=True).start()
-
-    def stop(self) -> None:
-        if self._mail is not None:
-            self._mail.put(None)
+    def readings(self) -> dict[str, Reading]:
+        with self._lock:
+            return dict(self.latest)
 
     # Called by the poller.
 
@@ -91,8 +86,9 @@ class ClimateWatch:
                 if device is None:
                     continue
                 self.latest[address] = reading
-                if now - reading.time <= timedelta(minutes=2 * self.cfg.every_minutes):
-                    self._tips_now[address] = {kind for kind, _ in self._tips(device, reading)}
+                if not stale(reading, now, self.cfg.every_minutes):
+                    limits = device.limits_from(self.cfg.limits)
+                    self._tips_now[address] = {kind for kind, _ in tips(reading, limits)}
 
     def reading(self, device: Thermometer, reading: Reading) -> None:
         with self._lock:
@@ -124,6 +120,11 @@ class ClimateWatch:
                 text += " " + t("climate.lost_last", time=f"{last.time:%H:%M}", reading=reading_text(last))
             self._say(text, silent=True)
         self._flush()
+
+    def polled(self, started: datetime) -> None:
+        """A poll that began at `started` has finished: every thermometer had its chance."""
+        with self._lock:
+            self._polled = started
 
     def poll_minutes(self) -> float:
         """Read more often while it is cold or close to it, so the alarm follows the temperature."""
@@ -236,17 +237,22 @@ class ClimateWatch:
 
     def _check_silent(self, now: datetime) -> None:
         """A thermometer that stopped answering while it was cold (a coin cell gives up in the
-        cold) cannot say it got warmer, so it counts as not warmer: the alarm. Its decision would
-        come with the first reading after check_minutes or snooze_minutes; a poll later, it is
-        overdue. A poll is the pause, the search and the reads, so a minute is added for those."""
-        cfg = self.cfg.cold
-        poll = timedelta(minutes=cfg.every_minutes, seconds=self.cfg.scan_seconds + 60)
+        cold) cannot say it got warmer, so it counts as not warmer: the alarm. Its decision is due
+        check_minutes or snooze_minutes into the stage; once a whole poll has begun after that and
+        finished without a reading from it, it has stopped answering. If no poll finishes at all
+        (Bluetooth hangs), the same after STUCK_POLLS polls' worth of time."""
+        cold = self.cfg.cold
+        poll = timedelta(minutes=min(cold.every_minutes, self.cfg.every_minutes), seconds=self.cfg.scan_seconds)
         for address, state in list(self.cold.items()):
-            wait = {"quiet": cfg.check_minutes, "off": cfg.snooze_minutes}.get(state.stage)
-            if wait is None or now - state.since < timedelta(minutes=wait) + poll:
+            wait = {"quiet": cold.check_minutes, "off": cold.snooze_minutes}.get(state.stage)
+            if wait is None:
                 continue
+            due = state.since + timedelta(minutes=wait)
             reading = self.latest.get(address)
-            if reading is None or reading.time < state.since + timedelta(minutes=wait):
+            if now < due or (reading is not None and reading.time >= due):
+                continue  # not yet, or the reading that decides it has come
+            missed = self._polled is not None and self._polled >= due and (reading is None or reading.time < self._polled)
+            if missed or now - due >= STUCK_POLLS * poll:
                 self.cold[address] = Cold("alarm", now, state.reference, "climate.alarm_silent")
 
     def _alarm_message(self, address: str, state: Cold, first: bool) -> None:
@@ -269,15 +275,10 @@ class ClimateWatch:
         self._say(t("climate.battery", who=self._who(device), volts=f"{reading.battery:.2f}",
                     percent=battery_percent(reading.battery)), silent=True)
 
-    def _tips(self, device: Thermometer, reading: Reading) -> list[tuple[str, str]]:
-        limits = device.limits_from(self.cfg.limits)
-        # Where the cold starts the alarm, the alarm speaks for it.
-        return [(kind, text) for kind, text in tips(reading, limits) if not (kind == "cold" and limits.alarm)]
-
     def _check_tips(self, device: Thermometer, reading: Reading, now: datetime) -> None:
         """A tip goes out when its trouble begins, without a sound, and no sooner than
         tips_every_hours after the same one: around a limit it would come and go every poll."""
-        found = self._tips(device, reading)
+        found = tips(reading, device.limits_from(self.cfg.limits))
         before = self._tips_now.get(device.address, set())
         self._tips_now[device.address] = {kind for kind, _ in found}
         for kind, tip in found:
@@ -292,10 +293,7 @@ class ClimateWatch:
         return label(device, len(self.cfg.devices))
 
     def _who(self, device: Thermometer) -> str:
-        """The thermometer as the subject of a sentence: 'Thermometer "Crib"', or 'The thermometer'."""
-        if not device.name and len(self.cfg.devices) == 1:
-            return t("thermo.who_one")
-        return t("thermo.who", name=self._name(device))
+        return who(device, len(self.cfg.devices))
 
     def _say(self, text: str | Reply, silent: bool) -> None:
         self._outbox.append((text, silent))
@@ -310,31 +308,20 @@ class ClimateWatch:
         for how, args in letters:
             if how is None:
                 continue
-            if self._mail is not None:
-                self._mail.put((how, args))
-            else:
-                self._deliver(how, args)
-
-    def _post(self) -> None:
-        while (letter := self._mail.get()) is not None:
-            self._deliver(*letter)
-
-    @staticmethod
-    def _deliver(how: Callable, args: tuple) -> None:
-        try:
-            how(*args)
-        except Exception:  # one message lost is better than the rest of them
-            log.exception(t("climate.failed"))
+            try:
+                how(*args)
+            except Exception:  # one message lost is better than the rest of them
+                log.exception(t("climate.failed"))
 
 
 class Siren:
-    """The cold alarm's sounds on this computer, in a thread of its own: a quiet beep once a
-    minute at first, then a loud sound with no pause until the alarm is turned off."""
+    """The cold alarm's sounds on this computer, in a thread of its own: a quiet beep every
+    quiet_every_seconds at first, then a loud sound with no pause until the alarm is turned off."""
 
-    def __init__(self, watch: ClimateWatch, cfg: ColdAlarmConfig, play: Callable[[str, float], None] | None = None):
+    def __init__(self, watch: ClimateWatch, cfg: ColdAlarmConfig, sound: Callable[[str, float], None] | None = None):
         self.watch = watch
         self.cfg = cfg
-        self.play = play or play_once
+        self.sound = sound or play
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="siren", daemon=True)
 
@@ -351,22 +338,13 @@ class Siren:
             try:
                 sound = self.watch.tick()
                 if sound == "alarm":
-                    self.play(self.cfg.alarm_sound, self.cfg.alarm_volume)
+                    self.sound(self.cfg.alarm_sound, self.cfg.alarm_volume)
                 elif sound == "quiet":
                     now = datetime.now()
-                    if last_quiet is None or (now - last_quiet).total_seconds() >= QUIET_EVERY:
+                    if last_quiet is None or (now - last_quiet).total_seconds() >= self.cfg.quiet_every_seconds:
                         last_quiet = now
-                        self.play(self.cfg.quiet_sound, self.cfg.quiet_volume)
+                        self.sound(self.cfg.quiet_sound, self.cfg.quiet_volume)
                 else:
                     last_quiet = None
             except Exception:  # keep sounding the next time rather than go quiet for good
                 log.exception(t("climate.failed"))
-
-
-def play_once(sound: str, volume: float) -> None:
-    from .notify import sound_path
-
-    try:
-        subprocess.run(["afplay", "-v", f"{volume:g}", sound_path(sound)], check=False)
-    except FileNotFoundError:  # afplay exists only on macOS
-        pass

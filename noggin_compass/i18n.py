@@ -36,10 +36,11 @@ MESSAGES: dict[str, dict[str, str]] = {
         "thermo.no_reading": "{name}: no readings yet.",
         "thermo.battery_low_one": "The battery in the thermometer is running low.",
         "thermo.battery_low": "The battery in the thermometer \"{name}\" is running low.",
-        "thermo.failed": "Thermometer {name} did not answer ({error}). Trying again every {minutes} min",
-        "thermo.recovered": "Thermometer {name} answers again",
-        "thermo.logged": "Thermometer {name}: {reading}, battery {battery} V",
+        "thermo.failed": "{who} did not answer ({error}). Trying again every {minutes} min",
+        "thermo.recovered": "{who} answers again",
+        "thermo.logged": "{who}: {reading}, battery {battery} V",
         "thermo.stopped": "Thermometers are no longer read",
+        "thermo.not_saved": "{who}: the reading could not be saved to the database",
         "thermo.menu.scanning": "Looking for thermometers nearby for {seconds} s, then reading each one, about 10 s each...",
         "thermo.menu.scan_failed": "Could not search over Bluetooth ({error}). Is Bluetooth on?",
         "thermo.menu.none": "No thermometers found. Supported: {models}. Bring one closer to the computer and try again.",
@@ -91,6 +92,13 @@ MESSAGES: dict[str, dict[str, str]] = {
         "climate.battery": "{who}: the battery is running low, {volts} V, about {percent}%. It takes a CR2032.",
         "climate.failed": "The room climate check failed",
         "err.thermometer_value": "{key}: alarm takes true or false, the limits take a number",
+        "err.bad_value": "{key}: {value!r} does not fit here, see config.example.yaml for what it takes",
+        "err.not_config": "{path} must hold settings as `name: value` lines, see config.example.yaml",
+        "err.roi": "camera.roi must be [x1, y1, x2, y2]: fractions of the frame from 0 to 1, with x1 < x2 and y1 < y2",
+        "err.day_start": "tracking.day_starts_at must be a time like 12:00",
+        "err.positive": "{key} must be above 0",
+        "err.thermometer_twice": "{key}: thermometer {address} is already in the list",
+        "err.sound": "{key}: there is no sound {sound}. Use a macOS sound (Tink, Ping, Sosumi, Funk...) or the path to a sound file",
         "cli.help.thermometer": "choose the thermometers to read, from the ones nearby",
         "cli.help.seconds": "how long to look for thermometers (default: 30)",
         "method.baby_unseen": "in the crib, but the points are not found",
@@ -160,28 +168,19 @@ MESSAGES: dict[str, dict[str, str]] = {
         "cli.quit_preview": " or q in the preview window",
         "cli.status": "{time} frame: {side} (score {score}; {method}) | confirmed: {confirmed}, {duration}",
         "cli.stopped": "Stopped, data saved to {path}",
+        "cli.frame_failed": "A frame could not be analysed; going on with the next ones",
         # Turn alerts and the Telegram bot
         "alert.stint": "Time to turn the baby: the head has been turned {side} for {duration}. Turn it {turn}.",
         "alert.imbalance": (
             "Time to turn the baby: over the last {hours} h the head was turned {side} for {more} "
             "and {turn} for only {less}. Turn it {turn}."
         ),
-        "bot.help": (
-            "noggin-compass\n"
-            "/now - where the head is now and whether it is time to turn\n"
-            "/stats - time per side over the last 24 hours\n"
-            "/sleep - sleep over the last 24 hours\n"
-            "/nap - log sleep outside the crib (in arms, in a pram)\n"
-            "/naps - change or delete logged sleep\n"
-            "/chart - a chart of the last 24 hours and left versus right per day\n"
-            "/photo - a picture from the camera right now\n"
-            "/marked - the same picture with what the program detected\n"
-            "Turn alerts arrive here by themselves."
-        ),
-        "bot.cmd.now": "where the head is now",
-        "bot.cmd.stats": "time per side, last 24 hours",
-        "bot.cmd.photo": "picture from the camera now",
-        "bot.cmd.marked": "picture with the detected points",
+        "bot.help_title": "noggin-compass",
+        "bot.help_end": "Alerts (time to turn, cold) arrive here by themselves.",
+        "bot.cmd.now": "where the head is now and whether it is time to turn",
+        "bot.cmd.stats": "time per side over the last {window}",
+        "bot.cmd.photo": "a picture from the camera right now",
+        "bot.cmd.marked": "the same picture with what the program detected",
         "bot.photos_off": "Pictures are off. To allow /photo and /marked, set telegram.photos: true in the config.",
         "bot.photo_caption": "{time}, head turned {side} (score {score})",
         "bot.no_data": "No data yet: the program has just started.",
@@ -193,7 +192,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "bot.turn": "Time to turn it {turn}.",
         "bot.ok": "No need to turn yet.",
         "bot.stats": (
-            "Last 24 hours:\n"
+            "Last {window}:\n"
             "left {left} ({left_pct})\n"
             "right {right} ({right_pct})\n"
             "straight {center} ({center_pct})\n"
@@ -207,21 +206,21 @@ MESSAGES: dict[str, dict[str, str]] = {
         "sleep.ongoing": "{start}-now  {duration}",
         "sleep.none": "No sleep found for these days. Sleep is told from the baby's movement, which older versions did not record.",
         "sleep.none_yet": "No sleep found yet: it counts after the baby has lain still for a while.",
-        "bot.cmd.sleep": "sleep, last 24 hours",
-        "bot.sleep": "Sleep over the last 24 hours: {total}, sleeps: {count}, longest: {longest}",
+        "bot.cmd.sleep": "sleep over the last {window}",
+        "bot.sleep": "Sleep over the last {window}: {total}, sleeps: {count}, longest: {longest}",
         "bot.now_asleep": "Asleep for {duration}, since {since}.",
         "bot.now_awake": "Not asleep right now.",
         "bot.stats_sleep": "sleep {total}, sleeps: {count}",
-        "chart.title_recent": "Head over the last 24 hours",
+        "chart.title_recent": "Head over the last {window}",
         "chart.title_day": "Head, day {date}",
         "chart.timeline": "When",
         "chart.head": "head",
         "chart.sleep": "sleep",
         "chart.days": "{left} and {right} per day",
-        "bot.cmd.chart": "chart, last 24 hours",
+        "bot.cmd.chart": "a chart of the last {window} and left versus right per day",
         "bot.chart_caption": "Data as of {time}",
-        "bot.cmd.nap": "log sleep outside the crib",
-        "bot.cmd.naps": "change logged sleep",
+        "bot.cmd.nap": "log sleep outside the crib (in arms, in a pram)",
+        "bot.cmd.naps": "change or delete logged sleep",
         "sleep.manual": "{line} (outside the crib)",
         "nap.ask": "How long did the baby sleep outside the crib? The sleep has just ended.",
         "nap.hours": "{h} h",
@@ -243,6 +242,12 @@ MESSAGES: dict[str, dict[str, str]] = {
             "telegram.chat_ids or NOGGIN_TELEGRAM_CHAT_IDS."
         ),
         "tg.error": "Telegram is unavailable: {error}",
+        "bot.camera_silent": "No frames from the camera since {time}. Below is how it was then.",
+        "notify.failed": "A message or a notification could not be sent",
+        "notify.sound_failed": "The sound {sound} does not play: check its name or file",
+        "tg.update_failed": "A command from Telegram failed",
+        "tg.command_failed": "Something went wrong, the details are in the program's log. Try again.",
+        "tg.photo_failed": "Could not send the picture. Try again.",
         # Errors and warnings
         "err.unknown_option": "Unknown config option: {key}",
         "err.not_section": "{key} must be a section",
@@ -284,10 +289,11 @@ MESSAGES: dict[str, dict[str, str]] = {
         "thermo.no_reading": "{name}: показаний пока нет.",
         "thermo.battery_low_one": "Батарейка в градуснике садится.",
         "thermo.battery_low": "Батарейка в градуснике \"{name}\" садится.",
-        "thermo.failed": "Градусник {name} не ответил ({error}). Пробую снова каждые {minutes} мин",
-        "thermo.recovered": "Градусник {name} снова отвечает",
-        "thermo.logged": "Градусник {name}: {reading}, батарейка {battery} В",
+        "thermo.failed": "{who} не ответил ({error}). Пробую снова каждые {minutes} мин",
+        "thermo.recovered": "{who} снова отвечает",
+        "thermo.logged": "{who}: {reading}, батарейка {battery} В",
         "thermo.stopped": "Градусники больше не читаются",
+        "thermo.not_saved": "{who}: показание не сохранилось в базу",
         "thermo.menu.scanning": "Ищу градусники рядом {seconds} с, потом читаю каждый, около 10 с на градусник...",
         "thermo.menu.scan_failed": "Не получилось искать по Bluetooth ({error}). Bluetooth включён?",
         "thermo.menu.none": "Градусников не нашёл. Поддерживаются: {models}. Поднесите градусник ближе к компьютеру и попробуйте снова.",
@@ -315,7 +321,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "climate.tip.hot": "теплее, чем советуют для сна ({low}-{high} °C): оденьте малыша легче, уберите лишнее одеяло или убавьте отопление",
         "climate.tip.cold": "холоднее, чем советуют для сна ({low}-{high} °C): закройте окна и дверь, оденьте малыша теплее",
         "climate.tip.dry": "суше, чем советуют (влажность {low}-{high}%): включите увлажнитель",
-        "climate.tip.humid": "влажнее, чем советуют ({low}-{high}%): включите осушитель или проветрите, пока малыша нет в комнате",
+        "climate.tip.humid": "влажнее, чем советуют (влажность {low}-{high}%): включите осушитель или проветрите, пока малыша нет в комнате",
         "climate.tip_line": "{tip}.",
         "climate.tip_line_named": "{name}: {tip}.",
         "climate.tip_message": "{name}: {reading}, {tip}.",
@@ -339,6 +345,13 @@ MESSAGES: dict[str, dict[str, str]] = {
         "climate.battery": "{who}: батарейка садится, {volts} В, около {percent}%. Нужна CR2032.",
         "climate.failed": "Сбой в проверке климата в комнате",
         "err.thermometer_value": "{key}: для alarm нужно true или false, для порогов - число",
+        "err.bad_value": "{key}: значение {value!r} сюда не подходит, что можно - см. config.example.yaml",
+        "err.not_config": "В {path} должны быть настройки строками `имя: значение`, см. config.example.yaml",
+        "err.roi": "camera.roi должен быть [x1, y1, x2, y2]: доли кадра от 0 до 1, x1 < x2 и y1 < y2",
+        "err.day_start": "tracking.day_starts_at должен быть временем вида 12:00",
+        "err.positive": "{key} должен быть больше 0",
+        "err.thermometer_twice": "{key}: градусник {address} уже есть в списке",
+        "err.sound": "{key}: нет звука {sound}. Укажите звук macOS (Tink, Ping, Sosumi, Funk...) или путь к файлу со звуком",
         "cli.help.thermometer": "выбрать, какие градусники читать, из тех, что рядом",
         "cli.help.seconds": "сколько искать градусники (по умолчанию 30)",
         "method.baby_unseen": "в кроватке, но точки не найдены",
@@ -404,27 +417,18 @@ MESSAGES: dict[str, dict[str, str]] = {
         "cli.quit_preview": " или q в окне превью",
         "cli.status": "{time} кадр: {side} (score {score}; {method}) | подтверждено: {confirmed}, {duration}",
         "cli.stopped": "Остановлено, данные сохранены в {path}",
+        "cli.frame_failed": "Кадр не удалось разобрать, продолжаю со следующими",
         "alert.stint": "Пора повернуть малыша: голова повёрнута {side} уже {duration}. Поверните её {turn}.",
         "alert.imbalance": (
             "Пора повернуть малыша: за последние {hours} ч голова была повёрнута {side} {more}, "
             "а {turn} всего {less}. Поверните её {turn}."
         ),
-        "bot.help": (
-            "noggin-compass\n"
-            "/now - где сейчас голова и не пора ли поворачивать\n"
-            "/stats - время по сторонам за последние 24 часа\n"
-            "/sleep - сон за последние 24 часа\n"
-            "/nap - записать сон вне кроватки (на руках, в коляске)\n"
-            "/naps - изменить или удалить записанный сон\n"
-            "/chart - график за последние 24 часа и влево/вправо по суткам\n"
-            "/photo - снимок с камеры прямо сейчас\n"
-            "/marked - тот же снимок с тем, что нашла программа\n"
-            "Сигналы \"пора повернуть\" приходят сюда сами."
-        ),
-        "bot.cmd.now": "где сейчас голова",
-        "bot.cmd.stats": "время по сторонам за 24 часа",
-        "bot.cmd.photo": "снимок с камеры сейчас",
-        "bot.cmd.marked": "снимок с найденными точками",
+        "bot.help_title": "noggin-compass",
+        "bot.help_end": "Сигналы (пора повернуть, холодно) приходят сюда сами.",
+        "bot.cmd.now": "где сейчас голова и не пора ли поворачивать",
+        "bot.cmd.stats": "время по сторонам за последние {window}",
+        "bot.cmd.photo": "снимок с камеры прямо сейчас",
+        "bot.cmd.marked": "тот же снимок с тем, что нашла программа",
         "bot.photos_off": "Снимки выключены. Чтобы разрешить /photo и /marked, укажите telegram.photos: true в конфиге.",
         "bot.photo_caption": "{time}, голова: {side} (score {score})",
         "bot.no_data": "Данных пока нет: программа только запустилась.",
@@ -436,7 +440,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "bot.turn": "Пора повернуть её {turn}.",
         "bot.ok": "Поворачивать пока не нужно.",
         "bot.stats": (
-            "За последние 24 часа:\n"
+            "За последние {window}:\n"
             "влево {left} ({left_pct})\n"
             "вправо {right} ({right_pct})\n"
             "прямо {center} ({center_pct})\n"
@@ -450,21 +454,21 @@ MESSAGES: dict[str, dict[str, str]] = {
         "sleep.ongoing": "{start}-сейчас  {duration}",
         "sleep.none": "За эти дни сна не найдено. Сон определяется по движению малыша, а старые версии программы его не записывали.",
         "sleep.none_yet": "Сна пока не найдено: он засчитывается, когда малыш какое-то время полежит спокойно.",
-        "bot.cmd.sleep": "сон за 24 часа",
-        "bot.sleep": "Сон за последние 24 часа: {total}, засыпаний: {count}, самый долгий: {longest}",
+        "bot.cmd.sleep": "сон за последние {window}",
+        "bot.sleep": "Сон за последние {window}: {total}, засыпаний: {count}, самый долгий: {longest}",
         "bot.now_asleep": "Спит уже {duration}, с {since}.",
         "bot.now_awake": "Сейчас не спит.",
         "bot.stats_sleep": "сон {total}, засыпаний: {count}",
-        "chart.title_recent": "Голова за последние 24 часа",
+        "chart.title_recent": "Голова за последние {window}",
         "chart.title_day": "Голова за сутки {date}",
         "chart.timeline": "Когда",
         "chart.head": "голова",
         "chart.sleep": "сон",
         "chart.days": "{left} и {right} по суткам",
-        "bot.cmd.chart": "график за 24 часа",
+        "bot.cmd.chart": "график за последние {window} и влево/вправо по суткам",
         "bot.chart_caption": "Данные на {time}",
-        "bot.cmd.nap": "записать сон вне кроватки",
-        "bot.cmd.naps": "изменить записанный сон",
+        "bot.cmd.nap": "записать сон вне кроватки (на руках, в коляске)",
+        "bot.cmd.naps": "изменить или удалить записанный сон",
         "sleep.manual": "{line} (вне кроватки)",
         "nap.ask": "Сколько малыш спал вне кроватки? Сон закончился только что.",
         "nap.hours": "{h} ч",
@@ -486,6 +490,12 @@ MESSAGES: dict[str, dict[str, str]] = {
             "telegram.chat_ids или NOGGIN_TELEGRAM_CHAT_IDS."
         ),
         "tg.error": "Telegram недоступен: {error}",
+        "bot.camera_silent": "С камеры нет кадров с {time}. Ниже - как было тогда.",
+        "notify.failed": "Не получилось отправить сообщение или уведомление",
+        "notify.sound_failed": "Звук {sound} не играет: проверьте его название или файл",
+        "tg.update_failed": "Команда из Telegram не выполнилась",
+        "tg.command_failed": "Что-то пошло не так, подробности в логе программы. Попробуйте ещё раз.",
+        "tg.photo_failed": "Не получилось отправить картинку. Попробуйте ещё раз.",
         "err.unknown_option": "Неизвестный параметр в конфиге: {key}",
         "err.not_section": "{key} должен быть секцией",
         "err.fallback_direction": "head.fallback_head_direction: up, down, left или right",
@@ -514,6 +524,20 @@ def set_language(language: str) -> None:
 
 def get_language() -> str:
     return _language
+
+
+def hours_text(hours: float) -> str:
+    """A number of hours in words, in the current language: "24 hours", "24 часа", "12 часов"."""
+    if _language != "ru":
+        return f"{hours:g} {'hour' if hours == 1 else 'hours'}"
+    if not float(hours).is_integer():
+        return f"{hours:g} часа"
+    n = int(hours)
+    if n % 10 == 1 and n % 100 != 11:
+        return f"{n} час"
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return f"{n} часа"
+    return f"{n} часов"
 
 
 def t(key: str, /, **kwargs) -> str:

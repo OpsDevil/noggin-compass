@@ -93,7 +93,7 @@ class TelegramBot:
         data = urllib.parse.urlencode(params).encode()
         return self._post(method, data, "application/x-www-form-urlencoded")
 
-    def send_photo(self, chat: int, photo: Photo) -> None:
+    def send_photo(self, chat: int, photo: Photo) -> bool:
         boundary = uuid.uuid4().hex
         parts = [
             f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode()
@@ -108,6 +108,8 @@ class TelegramBot:
             self._post("sendPhoto", b"".join(parts), f"multipart/form-data; boundary={boundary}")
         except Exception as error:
             log.warning(t("tg.error", error=error))
+            return False
+        return True
 
     def send(self, text: str | Reply, chat_ids: list[int] | None = None, silent: bool = False) -> None:
         """`silent` delivers it without a sound on the phone: for news that can wait till morning."""
@@ -148,27 +150,40 @@ class TelegramBot:
             log.warning(t("tg.error", error=error))
 
     def handle_updates(self, updates: list[dict]) -> int | None:
-        """Answer commands from allowed chats and return the next offset."""
+        """Answer commands from allowed chats and return the next offset. An update that fails is
+        logged and passed over: otherwise it would come back with every poll, block all the
+        commands after it, and run the ones before it in the batch again."""
         offset = None
         for update in updates:
             offset = update["update_id"] + 1
-            if "callback_query" in update:
-                self._press(update["callback_query"])
-                continue
-            message = update.get("message") or {}
-            chat = (message.get("chat") or {}).get("id")
-            text = message.get("text") or ""
-            if chat is None or not text:
-                continue
-            if chat not in self.chat_ids:
-                log.info(t("tg.unknown_chat", chat=chat))
-                continue
-            reply = self.handler(text)
-            if isinstance(reply, Photo):
-                self.send_photo(chat, reply)
-            elif reply:
-                self.send(reply, [chat])
+            try:
+                self._handle(update)
+            except Exception:
+                log.exception(t("tg.update_failed"))
+                chat = ((update.get("message") or (update.get("callback_query") or {}).get("message") or {})
+                        .get("chat") or {}).get("id")
+                if chat in self.chat_ids:
+                    self.send(t("tg.command_failed"), [chat])
         return offset
+
+    def _handle(self, update: dict) -> None:
+        if "callback_query" in update:
+            self._press(update["callback_query"])
+            return
+        message = update.get("message") or {}
+        chat = (message.get("chat") or {}).get("id")
+        text = message.get("text") or ""
+        if chat is None or not text:
+            return
+        if chat not in self.chat_ids:
+            log.info(t("tg.unknown_chat", chat=chat))
+            return
+        reply = self.handler(text)
+        if isinstance(reply, Photo):
+            if not self.send_photo(chat, reply):
+                self.send(t("tg.photo_failed"), [chat])
+        elif reply:
+            self.send(reply, [chat])
 
     def _poll(self) -> None:
         offset = None

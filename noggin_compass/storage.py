@@ -10,16 +10,18 @@ from pathlib import Path
 from .head import HeadEstimate, Side
 from .thermometer import Reading
 
-COMMIT_EVERY = 10
 
 
 class Storage:
     def __init__(self, path: str | Path):
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-        # The bot writes from its own connection while the run loop holds a write transaction
-        # for up to COMMIT_EVERY frames, so it waits for the lock instead of failing.
+        # The run loop, the bot and the thermometers each write through their own connection;
+        # one that finds the database busy waits for it instead of failing.
         self.conn = sqlite3.connect(path, timeout=30)
         self.conn.execute("PRAGMA journal_mode=WAL")
+        # In WAL mode this is still safe against a crash of the program; it saves a disk flush on
+        # every commit, and the run loop commits every frame.
+        self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS samples ("
             " ts REAL NOT NULL, side TEXT NOT NULL, score REAL, method TEXT)"
@@ -27,7 +29,10 @@ class Storage:
         self.conn.execute("CREATE INDEX IF NOT EXISTS samples_ts ON samples(ts)")
         columns = {row[1] for row in self.conn.execute("PRAGMA table_info(samples)")}
         if "motion" not in columns:  # databases from before sleep tracking
-            self.conn.execute("ALTER TABLE samples ADD COLUMN motion REAL")
+            try:
+                self.conn.execute("ALTER TABLE samples ADD COLUMN motion REAL")
+            except sqlite3.OperationalError:  # another connection added it a moment ago
+                pass
         # Sleep outside the crib, entered by the parents in Telegram.
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS naps ("
@@ -39,20 +44,18 @@ class Storage:
             " ts REAL NOT NULL, address TEXT NOT NULL, temperature REAL, humidity REAL, battery REAL)"
         )
         self.conn.execute("CREATE INDEX IF NOT EXISTS climate_ts ON climate(address, ts)")
-        self._pending = 0
 
     def add(self, ts: datetime, estimate: HeadEstimate, motion: float | None = None) -> None:
+        # Committed at once: an open write transaction would make the bot and the thermometers
+        # wait, up to 30 s and then fail, whenever the camera stalls between frames.
         self.conn.execute(
             "INSERT INTO samples (ts, side, score, method, motion) VALUES (?, ?, ?, ?, ?)",
             (ts.timestamp(), estimate.side.value, estimate.score, estimate.code, motion),
         )
-        self._pending += 1
-        if self._pending >= COMMIT_EVERY:
-            self.flush()
+        self.conn.commit()
 
     def flush(self) -> None:
         self.conn.commit()
-        self._pending = 0
 
     def samples(
         self, since: datetime | None = None, until: datetime | None = None
@@ -78,6 +81,13 @@ class Storage:
         ]
 
     def add_nap(self, start: datetime, end: datetime) -> int:
+        """The id of the new nap, or of the same one already there: a button pressed twice, or a
+        press that came again, must not log the sleep twice."""
+        same = self.conn.execute(
+            "SELECT id FROM naps WHERE start = ? AND end = ?", (start.timestamp(), end.timestamp())
+        ).fetchone()
+        if same is not None:
+            return int(same[0])
         cursor = self.conn.execute(
             "INSERT INTO naps (start, end) VALUES (?, ?)", (start.timestamp(), end.timestamp())
         )
@@ -126,7 +136,7 @@ class Storage:
             " WHERE (address, ts) IN (SELECT address, MAX(ts) FROM climate GROUP BY address)"
         )
         return {
-            address: Reading(datetime.fromtimestamp(ts), temperature, int(humidity), battery)
+            address: Reading(datetime.fromtimestamp(ts), temperature, None if humidity is None else int(humidity), battery)
             for address, ts, temperature, humidity, battery in self.conn.execute(query)
         }
 

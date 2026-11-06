@@ -17,7 +17,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from .config import Config
-from .head import HeadEstimate, Side, side_label
+from .head import HeadEstimate, Side, left_of, side_label
 from .i18n import t
 from .pose import Person
 from .thermometer import Reading, climate_lines
@@ -141,7 +141,7 @@ def draw(
         if estimate.axis is not None and face:
             start = tuple(person.xy[face].mean(axis=0))
             up = estimate.axis
-            toward_left = (-up[1], up[0]) if not mirrored else (up[1], -up[0])
+            toward_left = tuple(left_of(up, mirrored))
             length = 0.22 * max(x2 - x1, y2 - y1)
             width = round(3 * unit)
             _arrow(draw_, start, up, length, UP_COLOR, width, t("preview.crown"), round(13 * unit))

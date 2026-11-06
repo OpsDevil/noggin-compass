@@ -143,19 +143,38 @@ def battery_percent(volts: float) -> int:
 
 
 def label(device: Thermometer, count: int) -> str:
-    """How messages name a thermometer: by its name, or "the thermometer" when it is the only one."""
+    """A thermometer's name wherever one is shown: its own, "Thermometer" when it is the only one,
+    or the end of its address. Lines, messages and the log all name it through here."""
     if device.name:
         return device.name
     return t("thermo.label") if count == 1 else device.address[-4:]
 
 
+def who(device: Thermometer, count: int) -> str:
+    """The thermometer as the subject of a sentence: 'Thermometer "Crib"', or 'The thermometer'."""
+    if not device.name and count == 1:
+        return t("thermo.who_one")
+    return t("thermo.who", name=label(device, count))
+
+
+# A reading older than this many polls is no longer "now": it is shown with its age, and no tip
+# is given from it, as what it showed may be over.
+STALE_POLLS = 2
+
+
+def stale(reading: Reading, now: datetime, every_minutes: float) -> bool:
+    return (now - reading.time).total_seconds() > STALE_POLLS * every_minutes * 60
+
+
 def tips(reading: Reading, limits: ClimateLimits) -> list[tuple[str, str]]:
-    """What in this reading is off for a baby's sleep, as (hot/cold/dry/humid, advice)."""
+    """What in this reading is off for a baby's sleep, as (hot/cold/dry/humid, advice), the same
+    for /now and for Telegram. Cold is a tip only where it does not start the alarm: where it
+    does, the alarm speaks for it."""
     found = []
     degrees = {"low": f"{limits.cold_below:g}", "high": f"{limits.hot_above:g}"}
     if reading.temperature > limits.hot_above:
         found.append(("hot", t("climate.tip.hot", **degrees)))
-    elif reading.temperature < limits.cold_below:
+    elif reading.temperature < limits.cold_below and not limits.alarm:
         found.append(("cold", t("climate.tip.cold", **degrees)))
     percent = {"low": f"{limits.dry_below:g}", "high": f"{limits.humid_above:g}"}
     if reading.humidity < limits.dry_below:
@@ -187,7 +206,7 @@ def climate_lines(
     several. A reading older than two polls gets its age, so an old number is not taken for now."""
     lines = []
     for device in devices:
-        name = device.name or device.address[-4:]
+        name = label(device, len(devices))
         reading = readings.get(device.address)
         if reading is None:
             text = t("thermo.no_reading_one") if len(devices) == 1 else t("thermo.no_reading", name=name)
@@ -196,9 +215,8 @@ def climate_lines(
         text = reading_text(reading)
         if battery:
             text = t("thermo.with_battery", reading=text, percent=battery_percent(reading.battery))
-        age = (now - reading.time).total_seconds()
-        if age > 2 * every_minutes * 60:
-            text = t("thermo.ago", reading=text, ago=fmt_duration(age))
+        if stale(reading, now, every_minutes):
+            text = t("thermo.ago", reading=text, ago=fmt_duration((now - reading.time).total_seconds()))
         lines.append(t("thermo.one", reading=text) if len(devices) == 1 else t("thermo.named", name=name, reading=text))
         if reading.battery < low_battery_volts:
             lines.append(t("thermo.battery_low_one") if len(devices) == 1 else t("thermo.battery_low", name=name))
@@ -212,7 +230,7 @@ def tip_lines(
     lines = []
     for device in devices:
         reading = readings.get(device.address)
-        if reading is None or (now - reading.time).total_seconds() > 2 * every_minutes * 60:
+        if reading is None or stale(reading, now, every_minutes):
             continue
         for _, tip in tips(reading, device.limits_from(defaults)):
             if len(devices) == 1:
@@ -223,10 +241,10 @@ def tip_lines(
 
 
 class ThermometerPoller:
-    """Reads the chosen thermometers every every_minutes in a thread of its own, saves the
-    readings and keeps the latest for the preview. A thermometer that does not answer is logged
-    once and tried again at the next poll; the camera goes on either way. Each result goes to
-    `watch` (a ClimateWatch), which may ask to read more often while it is cold."""
+    """Reads the chosen thermometers every every_minutes in a thread of its own and saves the
+    readings. Each result goes to `watch` (a ClimateWatch), which keeps the latest for /now, the
+    preview and the alarm, and may ask to read more often while it is cold. A thermometer that
+    does not answer is logged once and tried again at the next poll; the camera goes on either way."""
 
     def __init__(self, devices: list[Thermometer], db_path: str, every_minutes: float, scan_seconds: float,
                  watch=None):
@@ -235,7 +253,6 @@ class ThermometerPoller:
         self.every_minutes = every_minutes
         self.scan_seconds = scan_seconds
         self.watch = watch
-        self.latest: dict[str, Reading] = {}
         self._failing: set[str] = set()
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="thermometers", daemon=True)
@@ -253,9 +270,6 @@ class ThermometerPoller:
 
         storage = Storage(self.db_path)
         try:
-            self.latest = storage.latest_climate()
-            if self.watch is not None:
-                self.watch.remember(self.latest)
             asyncio.run(self._poll(storage))
         except Exception:  # never let the thread die silently
             log.exception(t("thermo.stopped"))
@@ -264,7 +278,9 @@ class ThermometerPoller:
 
     async def _poll(self, storage) -> None:
         while not self._stop.is_set():
+            started = datetime.now()
             await self._read_all(storage)
+            self._tell("polled", started)
             minutes = self.every_minutes if self.watch is None else self.watch.poll_minutes()
             # Wait in short steps so that stop() is noticed.
             for _ in range(int(minutes * 60)):
@@ -288,20 +304,23 @@ class ThermometerPoller:
                     self._result(device, error, storage)
 
     def _result(self, device: Thermometer, result: Reading | Exception, storage) -> None:
-        name = device.name or device.address[-4:]
+        name = who(device, len(self.devices))
         if isinstance(result, Exception):
             if device.address not in self._failing:
-                log.warning(t("thermo.failed", name=name, error=describe(result), minutes=f"{self.every_minutes:g}"))
+                log.warning(t("thermo.failed", who=name, error=describe(result), minutes=f"{self.every_minutes:g}"))
             self._failing.add(device.address)
             self._tell("no_answer", device)
             return
         if device.address in self._failing:
-            log.info(t("thermo.recovered", name=name))
+            log.info(t("thermo.recovered", who=name))
         self._failing.discard(device.address)
-        self.latest[device.address] = result
-        storage.add_climate(device.address, result)
-        log.info(t("thermo.logged", name=name, reading=reading_text(result), battery=f"{result.battery:.2f}"))
+        log.info(t("thermo.logged", who=name, reading=reading_text(result), battery=f"{result.battery:.2f}"))
+        # The alarm hears of it even if it cannot be saved: a full disk must not silence it.
         self._tell("reading", device, result)
+        try:
+            storage.add_climate(device.address, result)
+        except Exception:
+            log.exception(t("thermo.not_saved", who=name))
 
     def _tell(self, what: str, *args) -> None:
         if self.watch is None:

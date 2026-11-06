@@ -7,13 +7,16 @@ import logging
 import queue
 import subprocess
 import sys
+import tempfile
 import threading
+import wave
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 from .balance import Alert, BalanceMonitor
 from .chart import DAYS_SHOWN, day_label, render_chart
@@ -51,8 +54,67 @@ def window_text() -> str:
     return hours_text(RECENT_WINDOW.total_seconds() / 3600)
 
 
+# The cold alarm's own sounds, made by the program: macOS has nothing meant to wake anyone.
+# "beep" is its first stage, "siren" the alarm itself.
+SOUND_RATE = 44100
+
+
+def _tone(frequency, seconds: float) -> np.ndarray:
+    """A square-ish wave: far louder to the ear than a sine at the same volume."""
+    f = np.broadcast_to(frequency, (int(SOUND_RATE * seconds),))
+    phase = 2 * np.pi * np.cumsum(f) / SOUND_RATE
+    wave_ = 0.75 * np.sign(np.sin(phase)) + 0.25 * np.sin(phase)
+    edge = min(len(wave_) // 2, int(SOUND_RATE * 0.004))  # no clicks at the ends
+    ramp = np.linspace(0, 1, edge)
+    wave_[:edge] *= ramp
+    wave_[len(wave_) - edge:] *= ramp[::-1]
+    return wave_
+
+
+def _silence(seconds: float) -> np.ndarray:
+    return np.zeros(int(SOUND_RATE * seconds))
+
+
+def _short_beeps() -> np.ndarray:
+    return np.concatenate([np.concatenate([_tone(2800, 0.12), _silence(0.06)]) for _ in range(4)])
+
+
+def beep_sound() -> np.ndarray:
+    """Four short beeps on one note, under a second: the first stage, every quiet_every_seconds."""
+    return _short_beeps()
+
+
+def siren_sound() -> np.ndarray:
+    """A rising wail and the same four short beeps, twice: about 3 seconds, played back to back
+    while the alarm lasts. Chosen by ear on 2026-11-06 over a flat tone and over beeps alone."""
+    rise = 600 + 1000 * np.linspace(0, 1, int(SOUND_RATE * 0.7)) ** 0.6
+    once = np.concatenate([_tone(rise, 0.7), _silence(0.04), _short_beeps()])
+    return np.concatenate([once, once])
+
+
+SOUNDS = {"beep": beep_sound, "siren": siren_sound}
+_made: dict[str, str] = {}  # the program's own sounds written in this run
+
+
+def write_sound(samples: np.ndarray, path: Path) -> Path:
+    pcm = (samples * 0.98 * 32767).astype(np.int16)  # at full scale: as loud as the Mac's volume allows
+    with wave.open(str(path), "wb") as out:
+        out.setnchannels(1)
+        out.setsampwidth(2)
+        out.setframerate(SOUND_RATE)
+        out.writeframes(pcm.tobytes())
+    return path
+
+
 def sound_path(sound: str) -> str:
-    """Resolve a file path or a macOS system sound name (Funk, Glass, Sosumi, etc.) to a file."""
+    """Resolve a file path, one of the program's own sounds (SOUNDS, made on first use) or a macOS
+    system sound name (Funk, Glass, Sosumi, etc.) to a file."""
+    if sound in SOUNDS:
+        # Written afresh once per run: a file left by an older version would sound the old way.
+        if sound not in _made:
+            path = Path(tempfile.gettempdir()) / f"noggin-compass-{sound}.wav"
+            _made[sound] = str(write_sound(SOUNDS[sound](), path))
+        return _made[sound]
     if Path(sound).expanduser().is_file():
         return str(Path(sound).expanduser())
     return str(SYSTEM_SOUNDS / f"{sound}.aiff")

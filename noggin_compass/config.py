@@ -188,11 +188,11 @@ class Thermometer:
 
 @dataclass
 class ColdAlarmConfig:
-    # When it gets colder than cold_below: first a quiet beep on the computer once a minute and one
-    # Telegram message. If it is not warmer after check_minutes, the alarm: a loud sound with no
-    # pause and a Telegram message with an Off button every repeat_minutes.
+    # When it gets colder than cold_below: first a beep on the computer every quiet_every_seconds
+    # and one Telegram message. If it is not warmer after check_minutes, the alarm: a siren with no
+    # pause and a Telegram message with an Off button every repeat_minutes. Meant to wake.
     check_minutes: float = 10
-    repeat_minutes: float = 2
+    repeat_minutes: float = 1
     # After Off the alarm is quiet this long, then comes back if it is not warmer.
     snooze_minutes: float = 20
     # By this much the temperature has to rise to count as getting warmer, and to rise above
@@ -208,12 +208,14 @@ class ColdAlarmConfig:
     # /mute in Telegram (or the button under a cold message) mutes the cold alarm for this many
     # hours unless told otherwise: for a walk, or while the room is aired. /unmute ends it.
     mute_hours: float = 2
-    # How often the quiet beep sounds before the alarm.
-    quiet_every_seconds: float = 60
-    # macOS system sounds (Tink, Sosumi, Funk...) or sound files, with volume 0..1.
-    quiet_sound: str = "Tink"
-    quiet_volume: float = 0.3
-    alarm_sound: str = "Sosumi"
+    # How often the beep sounds before the alarm.
+    quiet_every_seconds: float = 10
+    # The program's own sounds: "beep" (four short beeps) and "siren" (a rising wail and the same
+    # beeps), or a macOS system sound (Tink, Sosumi, Funk...) or a sound file. Volume 0..1, of the
+    # Mac's own volume, which the program leaves alone: keep it up at night.
+    quiet_sound: str = "beep"
+    quiet_volume: float = 1.0
+    alarm_sound: str = "siren"
     alarm_volume: float = 1.0
 
 

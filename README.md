@@ -272,7 +272,7 @@ Every alert can be turned off:
   For a walk or while the room is aired, `/mute` in Telegram mutes the cold alarm for 2 hours
   (`thermometers.cold.mute_hours`; `/mute 3` for three), and so does the **Mute for 2 h** button
   under a cold message; `/unmute` turns it back on, and when the time is up it comes back by
-  itself, starting over from the quiet beep if it is still cold. Only the cold alarm is muted:
+  itself, starting over from the beeping if it is still cold. Only the cold alarm is muted:
   "time to turn" and the silent camera go on as usual. `alarm: false` next to a thermometer turns
   the cold alarm off for that one, and `thermometers.limits.alarm: false` for all of them (cold
   then only gives a tip).
@@ -371,22 +371,24 @@ kept). Restart `noggin-compass run` to start reading.
 For a window or a door left open at night. When a thermometer shows less than
 `thermometers.limits.cold_below` (18 °C):
 
-1. A quiet beep on the computer running the program once a minute (`quiet_every_seconds`), and
+1. Four short beeps on the computer running the program every 10 seconds (`quiet_every_seconds`), and
    one Telegram message:
    "Crib: 17.8 °C, colder than 18 °C. Check the windows and the door. If it is not warmer in 10 min,
    the alarm goes off." From then on the thermometers are read every 2 minutes.
-2. If after 10 minutes it is not warmer, the alarm: a loud sound with no pause, a notification on
-   the computer and a Telegram message with a **Turn off** button every 2 minutes. If the
+2. If after 10 minutes it is not warmer, the alarm: a siren with no pause (a rising wail and the
+   same four beeps, meant to wake), a notification on the computer and a Telegram message with
+   a **Turn off** button every minute. If the
    temperature falls by another degree before the 10 minutes are up, the alarm starts at once.
-   If it is getting warmer by itself, the quiet beeping goes on for another 10 minutes instead.
+   If it is getting warmer by itself, the beeping goes on for another 10 minutes instead.
 3. **Turn off** silences the alarm for 20 minutes. If by then it is not warmer, the alarm comes back;
-   if it is getting warmer but is still cold, the quiet beeping goes on instead. **Mute for 2 h**
+   if it is getting warmer but is still cold, the beeping goes on instead. **Mute for 2 h**
    mutes it for longer, see [Turning alerts off](#turning-alerts-off).
 4. Once it is `warming_degrees` (0.3 °C) above `cold_below`, it all ends, and Telegram says so
    without a sound. The margin keeps a reading that wobbles around the limit from ending it.
 
-`/now` says what the alarm is doing. The sounds play on the computer, so keep its volume up. The
-times and the sounds are in `thermometers.cold`.
+`/now` says what the alarm is doing. The beep and the siren are made by the program itself, at
+full scale; they play on the computer at its own volume, which the program does not touch, so keep
+it up at night. The times and the sounds are in `thermometers.cold`.
 
 ### Tips, a lost thermometer, a low battery
 
@@ -491,17 +493,17 @@ name, rather than at night when the option is first used.
 | `thermometers.limits.dry_below` | `40` | Below this humidity (%), a tip to turn on a humidifier. |
 | `thermometers.limits.humid_above` | `60` | Above this humidity (%), a tip to turn on a dehumidifier. |
 | `thermometers.limits.alarm` | `true` | Whether cold starts the alarm. `false`: a tip, as for the heat. |
-| `thermometers.cold.check_minutes` | `10` | How long the quiet beeping goes on before the alarm, if it does not get warmer. |
-| `thermometers.cold.repeat_minutes` | `2` | How often the alarm message is repeated in Telegram until **Turn off**. |
+| `thermometers.cold.check_minutes` | `10` | How long the beeping goes on before the alarm, if it does not get warmer. |
+| `thermometers.cold.repeat_minutes` | `1` | How often the alarm message is repeated in Telegram until **Turn off**. |
 | `thermometers.cold.snooze_minutes` | `20` | How long **Turn off** silences the alarm. |
 | `thermometers.cold.warming_degrees` | `0.3` | How much the temperature has to rise to count as getting warmer, and to rise above `cold_below` to end the alarm. The readings wobble by about 0.1 °C: lower, and the alarm may end on that wobble. |
 | `thermometers.cold.colder_degrees` | `1.0` | Falling this much below where the cold began starts the alarm at once, without waiting `check_minutes`. |
 | `thermometers.cold.every_minutes` | `2` | How often to read the thermometers while it is colder than `cold_below` + `close_degrees`, so the alarm follows the temperature. Costs battery, but only on cold nights. |
 | `thermometers.cold.close_degrees` | `1.0` | See `every_minutes` above. |
 | `thermometers.cold.mute_hours` | `2` | How long `/mute` in Telegram, and the button under a cold message, mute the cold alarm. `/mute 3` mutes it for 3 hours whatever this says. |
-| `thermometers.cold.quiet_every_seconds` | `60` | How often the quiet beep sounds before the alarm. |
-| `thermometers.cold.quiet_sound`, `quiet_volume` | `Tink`, `0.3` | The quiet beep: a macOS system sound (Tink, Ping, Sosumi, Funk...) or a sound file, and its volume 0..1. |
-| `thermometers.cold.alarm_sound`, `alarm_volume` | `Sosumi`, `1.0` | The alarm sound and its volume. |
+| `thermometers.cold.quiet_every_seconds` | `10` | How often the beep sounds before the alarm. |
+| `thermometers.cold.quiet_sound`, `quiet_volume` | `beep`, `1.0` | The first stage's sound: `beep` (four short beeps) or `siren` (a rising wail and the same beeps), the program's own, or a macOS system sound (Tink, Ping, Sosumi, Funk...) or a sound file; and its volume 0..1 of the Mac's volume. |
+| `thermometers.cold.alarm_sound`, `alarm_volume` | `siren`, `1.0` | The alarm's sound, the same choice, played with no pause; and its volume. |
 
 ## Models
 

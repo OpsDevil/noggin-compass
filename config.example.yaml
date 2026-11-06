@@ -118,21 +118,21 @@ thermometers:
     humid_above: 60         # above this humidity, a tip to turn on a dehumidifier
     alarm: true             # false: cold gives a tip, without the alarm
 
-  # The cold alarm, for a window or a door left open at night. Below cold_below: a quiet beep on
-  # this computer once a minute and one Telegram message. Not warmer after check_minutes: the alarm,
-  # a loud sound with no pause and a Telegram message with an Off button every repeat_minutes.
-  # Off silences it for snooze_minutes; then it comes back unless it got warmer.
+  # The cold alarm, for a window or a door left open at night. Below cold_below: a beep on this
+  # computer every quiet_every_seconds and one Telegram message. Not warmer after check_minutes:
+  # the alarm, a siren with no pause and a Telegram message with an Off button every
+  # repeat_minutes. Off silences it for snooze_minutes; then it comes back unless it got warmer.
   cold:
     check_minutes: 10
-    repeat_minutes: 2
+    repeat_minutes: 1
     snooze_minutes: 20
     warming_degrees: 0.3    # "warmer" means up by this much; the readings wobble by about 0.1 °C
     colder_degrees: 1.0     # falling this much below where it began starts the alarm at once
     every_minutes: 2        # read this often while it is colder than cold_below + close_degrees
     close_degrees: 1.0
     mute_hours: 2           # /mute in Telegram mutes the cold alarm this long by default
-    quiet_every_seconds: 60 # how often the quiet beep sounds before the alarm
-    quiet_sound: Tink       # macOS system sound (Tink, Ping, Sosumi, Funk...) or a sound file
-    quiet_volume: 0.3       # 0..1
-    alarm_sound: Sosumi
+    quiet_every_seconds: 10 # how often the beep sounds before the alarm
+    quiet_sound: beep       # the program's own: beep or siren; or a macOS sound (Sosumi...) or a file
+    quiet_volume: 1.0       # 0..1 of the Mac's volume, which the program leaves alone
+    alarm_sound: siren      # the program's own: a rising wail and four short beeps, meant to wake
     alarm_volume: 1.0

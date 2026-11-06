@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 
+import numpy as np
 import pytest
 
 from noggin_compass.climate import OFF, ClimateWatch, Siren
@@ -82,10 +83,10 @@ def test_the_alarm_repeats_until_it_is_turned_off_and_comes_back_if_still_cold()
     night.clock.wait(10)
     night.read(17.4)
     night.take()
-    night.clock.wait(1)
+    night.clock.wait(0.5)
     assert night.watch.tick() == "alarm" and night.take() == []
-    night.clock.wait(1)
-    assert night.watch.tick() == "alarm" and len(night.take()) == 1  # every repeat_minutes
+    night.clock.wait(0.5)
+    assert night.watch.tick() == "alarm" and len(night.take()) == 1  # every repeat_minutes, 1 by default
     answer = night.watch.press(OFF)
     assert answer.text == "The alarm is off. If it is not warmer in 20 min, it goes off again." and not answer.buttons
     assert night.watch.tick() is None  # silent at once
@@ -251,30 +252,54 @@ def test_now_shows_the_battery_and_the_tips():
     assert one[0].startswith("Warmer than advised for sleep")
 
 
-def test_the_siren_beeps_quietly_once_a_minute_and_loudly_without_a_pause():
+def test_the_siren_beeps_every_few_seconds_and_then_sounds_with_no_pause():
+    import time as clock
+
     class Watch:
         sound = "quiet"
 
         def tick(self):
             return self.sound
 
-    played = []
-    calls = []
+    played, waits = [], []
 
-    def wait(seconds):  # instead of a second's pause: stop after 3 sounds or 200 rounds
-        calls.append(seconds)
-        return len(played) >= 3 or len(calls) > 200
+    def play(sound, volume):
+        played.append((sound, volume))
+        if sound == "siren":
+            clock.sleep(0.25)  # the siren takes a while to play
+
+    def wait(seconds):  # instead of the pause: stop after 3 siren rounds or 20 waits
+        waits.append(seconds)
+        return sum(s == "siren" for s, _ in played) >= 3 or len(waits) >= 20
 
     watch = Watch()
-    siren = Siren(watch, ThermometersConfig().cold, sound=lambda sound, volume: played.append((sound, volume)))
+    siren = Siren(watch, ThermometersConfig().cold, sound=play)
     siren._stop.wait = wait
+    siren._stop.is_set = lambda: sum(s == "siren" for s, _ in played) >= 3 or len(waits) >= 20
     siren._run()
-    assert played[0] == ("Tink", 0.3) and len(played) == 1  # one quiet beep, the next only in a minute
+    assert played[0] == ("beep", 1.0) and len(played) == 1  # waits are not real here: one beep
     played.clear()
-    calls.clear()
+    waits.clear()
     watch.sound = "alarm"
     siren._run()
-    assert played == [("Sosumi", 1.0)] * 3
+    assert played == [("siren", 1.0)] * 3 and waits == []  # back to back, no pause between them
+
+
+@pytest.mark.parametrize("name, seconds", [("beep", (0.3, 0.8)), ("siren", (2.5, 3.5))])
+def test_the_alarm_sounds_are_made_by_the_program(tmp_path, monkeypatch, name, seconds):
+    import tempfile
+    import wave
+
+    from noggin_compass import notify
+
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(notify, "_made", {})
+    (tmp_path / f"noggin-compass-{name}.wav").write_bytes(b"left by an older version")
+    path = notify.sound_path(name)
+    with wave.open(path) as sound:
+        frames = np.frombuffer(sound.readframes(sound.getnframes()), dtype=np.int16)
+        assert sound.getframerate() == 44100 and seconds[0] < sound.getnframes() / 44100 < seconds[1]
+    assert np.abs(frames).max() > 30000  # at full scale: as loud as the Mac's volume allows
 
 
 def test_config_takes_limits_per_thermometer_and_keeps_them(tmp_path):

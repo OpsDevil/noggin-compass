@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -370,8 +371,8 @@ class ClimateWatch:
 
 
 class Siren:
-    """The cold alarm's sounds on this computer, in a thread of its own: a quiet beep every
-    quiet_every_seconds at first, then a loud sound with no pause until the alarm is turned off."""
+    """The cold alarm's sounds on this computer, in a thread of its own: a beep every
+    quiet_every_seconds at first, then the siren with no pause until the alarm is turned off."""
 
     def __init__(self, watch: ClimateWatch, cfg: ColdAlarmConfig, sound: Callable[[str, float], None] | None = None):
         self.watch = watch
@@ -385,15 +386,20 @@ class Siren:
 
     def stop(self) -> None:
         self._stop.set()
-        self._thread.join(timeout=3)
+        self._thread.join(timeout=5)
 
     def _run(self) -> None:
         last_quiet = None
-        while not self._stop.wait(1):
+        while not self._stop.is_set():
             try:
                 sound = self.watch.tick()
                 if sound == "alarm":
+                    began = time.monotonic()
                     self.sound(self.cfg.alarm_sound, self.cfg.alarm_volume)
+                    # Back to back: a real alarm does not pause. One that could not play at all
+                    # (no afplay) would spin, so then wait as usual.
+                    if time.monotonic() - began > 0.2:
+                        continue
                 elif sound == "quiet":
                     now = datetime.now()
                     if last_quiet is None or (now - last_quiet).total_seconds() >= self.cfg.quiet_every_seconds:
@@ -403,3 +409,4 @@ class Siren:
                     last_quiet = None
             except Exception:  # keep sounding the next time rather than go quiet for good
                 log.exception(t("climate.failed"))
+            self._stop.wait(0.5)

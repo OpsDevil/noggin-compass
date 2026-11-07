@@ -342,3 +342,20 @@ def test_naps_count_in_sleep_and_stats(tmp_path):
         assert "Сейчас не спит." not in now
     finally:
         set_language("en")
+
+
+def test_the_longest_sleep_is_whole_even_when_it_began_before_the_window(tmp_path):
+    cfg = Config()
+    cfg.storage.db_path = str(tmp_path / "db.sqlite")
+    storage = Storage(cfg.storage.db_path)
+    # 21:00-23:00 on the 4th, an hour of it before the window, and 08:00-09:30 on the 5th.
+    for start, minutes in ((T0 - timedelta(hours=1), 120), (T0 + timedelta(hours=10), 90)):
+        for i in range(0, minutes * 60, 5):
+            storage.add(start + timedelta(seconds=i), HeadEstimate(Side.LEFT, 0.8), 0.0)
+    storage.close()
+    notifier = notify.Notifier(cfg)
+    notifier.clock = lambda: T0 + timedelta(hours=24)
+    lines = notifier.sleep_text().split("\n")
+    # The total takes only the hour inside the window, the longest the whole sleep.
+    assert lines[0] == "Sleep over the last 24 hours: 2 h 30 min, sleeps: 2, longest: 2 h 00 min"
+    assert lines[1].startswith("21:00-23:00  2 h 00 min")

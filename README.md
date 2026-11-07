@@ -301,7 +301,9 @@ barely moves, an awake one turns, kicks and waves its arms. This is how sleep ac
   during sleep do not count, even when they go on for a few minutes in a row.
 
 `noggin-compass report` shows sleep per day and the list of sleeps, `/sleep` in Telegram the same
-for the last 24 hours, `/now` and the preview whether the baby is asleep right now. The raw movement of every frame
+for the last 24 hours, `/now` and the preview whether the baby is asleep right now. A sleep across
+midnight or across the start of those 24 hours adds only its part inside the day or the 24 hours to
+the total, while "longest" takes it whole, from falling asleep to waking up. The raw movement of every frame
 is stored, so changed thresholds apply to old nights too.
 
 ```

@@ -141,8 +141,9 @@ def test_a_sleep_across_midnight_gives_each_day_its_hours_and_one_falling_asleep
     start = datetime(2026, 11, 5, 23, 0)
     first, second = sleep_days(frames("s" * 120, start), CFG, time(0, 0))
     assert (first.day.day, second.day.day) == (5, 6)
-    assert second.total == 3600 and second.count == 0 and second.longest == 3600  # the morning hours
+    assert second.total == 3600 and second.count == 0  # the morning hours
     assert first.count == 1 and first.total == first.periods[0].seconds  # the falling asleep
+    assert first.longest == second.longest == 7200  # the longest is the whole night in both
     assert first.periods[0].goes_on and second.periods[0].continued
     lines = render_sleep([first, second], time(0, 0), detail_days=2)
     assert "(goes on into the next day)" in lines and "00:00-01:00  1 h 00 min (from the day before)" in lines

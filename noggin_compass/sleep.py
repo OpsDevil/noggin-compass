@@ -50,6 +50,8 @@ class SleepPeriod:
     continued: bool = False
     # A piece of a sleep cut at the end of a day: it goes on into the next one.
     goes_on: bool = False
+    # The whole sleep a piece was cut from (see cut); None for a whole sleep.
+    whole: Span | None = None
 
     @classmethod
     def nap(cls, start: datetime, end: datetime, ongoing: bool = False) -> SleepPeriod:
@@ -60,10 +62,17 @@ class SleepPeriod:
     def seconds(self) -> float:
         return (self.end - self.start).total_seconds()
 
+    @property
+    def whole_seconds(self) -> float:
+        """How long the whole sleep lasted, this piece of it and the rest."""
+        start, end = self.whole or (self.start, self.end)
+        return (end - start).total_seconds()
+
     def cut(self, start: datetime, end: datetime, **flags) -> SleepPeriod:
         """The part of it within [start, end)."""
+        whole = self.whole or (self.start, self.end)
         start, end = max(start, self.start), min(end, self.end)
-        return SleepPeriod(start, end, self.ongoing and end == self.end, self.manual, **flags)
+        return SleepPeriod(start, end, self.ongoing and end == self.end, self.manual, whole=whole, **flags)
 
 
 def _union(spans: list[Span]) -> list[Span]:
@@ -226,13 +235,18 @@ class SleepDay:
 
     @property
     def longest(self) -> float:
-        """The longest stretch of sleep within the day."""
-        return max((p.seconds for p in self.periods), default=0.0)
+        return longest_sleep(self.periods)
+
+
+def longest_sleep(periods: list[SleepPeriod]) -> float:
+    """The longest sleep, whole: a night across midnight or across the start of a window counts
+    from falling asleep to waking up, not only its piece."""
+    return max((p.whole_seconds for p in periods), default=0.0)
 
 
 def within(periods: list[SleepPeriod], since: datetime) -> list[SleepPeriod]:
-    """What of each period falls after `since`: for the totals and the longest of a window, so a
-    sleep that began before it counts only its part inside."""
+    """What of each period falls after `since`: for the total of a window, so a sleep that began
+    before it counts only its part inside."""
     return [p.cut(since, p.end) for p in periods if p.end > since]
 
 

@@ -84,7 +84,7 @@ def test_a_sleep_that_began_before_the_window_counts_only_its_part_inside():
     since = T0
     periods = [SleepPeriod(T0 - timedelta(hours=2), T0 + timedelta(hours=1))]
     inside = within(periods, since)
-    assert inside[0].start == T0 and inside[0].seconds == 3600  # longest can't exceed the total
+    assert inside[0].start == T0 and inside[0].seconds == 3600
     assert within([SleepPeriod(T0 - timedelta(hours=3), T0 - timedelta(hours=1))], since) == []
 
 

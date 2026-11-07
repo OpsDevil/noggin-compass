@@ -3,7 +3,7 @@ import math
 import numpy as np
 import pytest
 
-from noggin_compass.pose import MEMORY_SECONDS, Person, PoseDetector, UprightView, body_up
+from noggin_compass.pose import MEMORY_SECONDS, Person, PoseDetector, UprightView, body_up, head_of
 
 
 @pytest.mark.parametrize("angle_deg", [0, 37, 90, 180, 270, -120])
@@ -149,7 +149,7 @@ def test_stronger_fresh_box_on_the_baby_wins_and_is_remembered():
     ]
     person = det.detect_upright(FRAME, 0.4, now=5.0)
     assert person.score == 0.6
-    assert det._memory == (5.0, pytest.approx([120, 110, 520, 310]), pytest.approx([1.0, 0.0]))
+    assert det._memory[:3] == (5.0, pytest.approx([120, 110, 520, 310]), pytest.approx([1.0, 0.0]))
 
 
 def test_baby_beats_a_remembered_bumper_even_when_weaker():
@@ -258,3 +258,40 @@ def test_points_far_outside_the_babys_box_are_dropped():
     person = detector._second_pass(np.zeros((400, 600, 3), np.uint8), box, up)
     assert person.conf[0] == pytest.approx(0.9) and person.xy[0] == pytest.approx([450.0, 200.0])
     assert person.conf[1] == 0.0 and not person.xy[1].any()
+
+
+def test_a_face_far_from_the_head_is_not_the_babys():
+    # The box also holds a toy with a face on the rail; the crop finds no baby and takes the toy.
+    detector = ScriptedDetector()
+    baby = lying_baby(0.9)  # head at (450, 200), shoulders at x = 350: the neck is 100 long
+    head = head_of(baby, 0.4)
+    box, up = baby.box, head.up
+    matrix = UprightView.around(box, up, detector.imgsz).matrix()
+
+    def crop_with_face_at(x, y):
+        xy, conf = np.zeros((17, 2)), np.zeros(17)
+        xy[:3] = np.array([[x, y], [x - 5, y - 5], [x - 5, y + 5]]) @ matrix[:, :2].T + matrix[:, 2]
+        conf[:3] = 0.9
+        return Person(np.zeros(4), 0.8, xy, conf)
+
+    frame = np.zeros((400, 600, 3), np.uint8)
+    detector.crops = [crop_with_face_at(200.0, 290.0)]  # 270 away: more than FACE_REACH necks
+    assert detector._second_pass(frame, box, up, head, 0.4) is None
+    detector.crops = [crop_with_face_at(440.0, 230.0)]  # the baby's own face, by the head
+    assert detector._second_pass(frame, box, up, head, 0.4) is not None
+    detector.crops = [crop_with_face_at(200.0, 290.0)]  # without a head to compare with: kept
+    assert detector._second_pass(frame, box, up) is not None
+
+
+def test_when_the_crop_finds_a_face_elsewhere_the_side_is_not_guessed():
+    det = ScriptedDetector()
+    det.first = lying_baby(0.5)
+    xy, conf = np.zeros((17, 2)), np.zeros(17)
+    view = UprightView.around(det.first.box, np.array([1.0, 0.0]), det.imgsz)
+    matrix = view.matrix()
+    xy[:3] = np.array([[150.0, 290.0]] * 3) @ matrix[:, :2].T + matrix[:, 2]
+    conf[:3] = 0.9
+    det.crops = [Person(np.zeros(4), 0.8, xy, conf)]
+    person = det.detect_upright(FRAME, 0.4, now=0.0)
+    assert not person.checked
+    assert det._memory is None

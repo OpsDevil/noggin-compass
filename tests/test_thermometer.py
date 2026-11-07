@@ -22,7 +22,7 @@ def reading(temperature=23.94, humidity=50, battery=2.854, minutes_ago=1):
 
 
 def test_the_five_bytes_the_thermometer_sends():
-    # 23.94 C, 50%, 2854 mV, as read from the real one on 2026-11-06.
+    # 23.94 C, 50%, 2854 mV, as read from a real one.
     data = (2394).to_bytes(2, "little", signed=True) + bytes([50]) + (2854).to_bytes(2, "little")
     assert parse(data, NOW) == Reading(NOW, 23.94, 50, 2.854)
     below_zero = (-150).to_bytes(2, "little", signed=True) + bytes([80]) + (3000).to_bytes(2, "little")

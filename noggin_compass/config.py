@@ -46,8 +46,8 @@ class DetectorConfig:
     upright: bool = True
     min_person_conf: float = 0.35
     # A person smaller than this share of the frame (after camera.roi) is ignored. With the frame
-    # cropped to the crib, a baby takes 10% or more, while the "people" the network finds in a
-    # crib (toys, the rail, the sheet print) take 1-6%.
+    # cropped to the crib, a baby takes a far larger share than the "people" the network finds in
+    # an empty crib (toys, the rail, the sheet print).
     min_person_area: float = 0.06
     min_keypoint_conf: float = 0.4
 
@@ -60,9 +60,9 @@ class PresenceConfig:
     enabled: bool = True
     # A fixed-resolution SigLIP or SigLIP 2 model from Hugging Face (not a NaFlex one).
     model: str = "google/siglip2-base-patch16-224"
-    # The baby counts as in the crib when the network is at least this sure (0..1). On our camera
-    # a baby scored 0.6-1.0 and an empty crib 0-0.13, whatever lay in it. Each snapshot keeps its
-    # score in analysis.jsonl ("presence").
+    # The baby counts as in the crib when the network is at least this sure (0..1). A baby usually
+    # scores well above it and an empty crib well below. Each snapshot keeps its score in
+    # analysis.jsonl ("presence").
     threshold: float = 0.35
     # How often to look. In between the last answer holds.
     every_seconds: float = 5
@@ -125,12 +125,11 @@ class SleepConfig:
     # A frame counts as movement when this share of the baby's area changed since the previous one.
     frame_motion: float = 0.02
     # A minute is restless when at least this share of its frames had movement. A sleeping baby
-    # twitches, and a parent's hand or a light from the door adds more: on the first recorded
-    # night sleeping minutes reached 0.3.
+    # twitches, and a parent's hand or a light from the door adds more.
     restless_share: float = 0.3
     # Asleep after fall_asleep_minutes still minutes within fall_asleep_window_minutes; the sleep
     # starts at the first of them. Falling asleep in the day, a baby waves its arms with eyes
-    # closed, so on 2026-11-05 a 30-minute nap never had 10 still minutes in a row.
+    # closed, so a short nap may never have the whole window still.
     fall_asleep_minutes: int = 8
     fall_asleep_window_minutes: int = 10
     # Awake after wake_minutes restless minutes within wake_window_minutes. In light morning
@@ -222,8 +221,8 @@ class ThermometersConfig:
     # own work, so not too often: the room temperature changes slowly anyway.
     every_minutes: float = 10
     # How long to look for the thermometers before a reading. A thermometer advertises every few
-    # seconds, and with a weak signal many are lost: on 2026-11-06 one took 47 s to be seen. Each
-    # is read as soon as it is seen.
+    # seconds, and with a weak signal many are lost, so finding one can take most of a minute.
+    # Each is read as soon as it is seen.
     scan_seconds: float = 90
     # Below this /now and Telegram say the battery runs low. A new CR2032 gives about 3.0 V, and
     # the thermometer stops working at about 2.2 V.

@@ -86,7 +86,7 @@ def beep_sound() -> np.ndarray:
 
 def siren_sound() -> np.ndarray:
     """A rising wail and the same four short beeps, twice: about 3 seconds, played back to back
-    while the alarm lasts. Chosen by ear on 2026-11-06 over a flat tone and over beeps alone."""
+    while the alarm lasts."""
     rise = 600 + 1000 * np.linspace(0, 1, int(SOUND_RATE * 0.7)) ** 0.6
     once = np.concatenate([_tone(rise, 0.7), _silence(0.04), _short_beeps()])
     return np.concatenate([once, once])

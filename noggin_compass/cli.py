@@ -64,9 +64,8 @@ def analyze(
             return HeadEstimate(Side.UNKNOWN, method="baby_unseen"), None
         return HeadEstimate(Side.ABSENT, method="no_person"), None
     if not person.checked:
-        # The second pass found nothing to check the face points on. Measured on 849 night frames
-        # (2026-11-05 and 06), this gave a side in 2% of them from points the first pass is often
-        # wrong about, and "not visible" in the rest: the side is not guessed, the baby is still there.
+        # The second pass found nothing to check the face points on. The first pass alone is often
+        # wrong about the face points, so the side is not guessed: the baby is still there.
         return HeadEstimate(Side.UNKNOWN, method="unchecked"), person
     estimate = estimate_head(
         person.xy,

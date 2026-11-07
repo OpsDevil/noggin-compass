@@ -16,10 +16,15 @@ UPRIGHT_MARGIN = 1.3
 UPRIGHT_PERSON_CONF = 0.1
 # On the crop, the baby is the one inside its own box: at least this share of the person found
 # there must lie in it. The crop's margin also holds what lies next to the baby, such as a toy with
-# a face of its own, and on 2026-11-07 the model took a black cat toy by the head for it.
+# a face of its own.
 WITHIN_SHARE = 0.5
 # Keypoints further outside the baby's box than this share of its size are not the baby's.
 OUTSIDE_MARGIN = 0.15
+# The face the crop finds must lie within this many neck lengths (shoulders to head) of where the
+# first pass saw the head. When the box is large enough to hold a toy next to the baby, the crop can
+# take the toy's face for the baby's, or put the face on a hand or a print on the sheet. The baby's
+# own face lies where the first pass saw the head, a toy by the crib side lies further away.
+FACE_REACH = 2.0
 # How long the crop of the last found baby is tried again. Seen from above in a sleep sack, the
 # baby is missed by the first pass on many frames, but a sleeping baby barely moves, so the old
 # crop still finds it. The limit stops a stale crop from outliving a real change of position.
@@ -77,17 +82,44 @@ class UprightView:
         return np.array([*crop.min(axis=0), *crop.max(axis=0)])
 
 
-def body_up(person: Person, min_conf: float) -> np.ndarray | None:
-    """Unit vector shoulders -> head, or None if the shoulders or the head are not visible."""
+@dataclass
+class Head:
+    """Where a pass saw the head: a rough center, and the neck from the shoulders to it."""
+
+    center: np.ndarray
+    neck: np.ndarray
+
+    @property
+    def up(self) -> np.ndarray:
+        return self.neck / float(np.linalg.norm(self.neck))
+
+
+def head_of(person: Person, min_conf: float) -> Head | None:
+    """None if the shoulders or the head are not visible."""
     if person.conf[LEFT_SHOULDER] < min_conf or person.conf[RIGHT_SHOULDER] < min_conf:
         return None
-    # A rough head center is enough for the axis, so low-confidence face points count too.
-    head = [i for i in range(5) if person.conf[i] >= min_conf / 2 and person.xy[i].any()]
-    if not head:
+    # A rough head center is enough, so low-confidence face points count too.
+    points = [i for i in range(5) if person.conf[i] >= min_conf / 2 and person.xy[i].any()]
+    if not points:
         return None
-    up = person.xy[head].mean(axis=0) - (person.xy[LEFT_SHOULDER] + person.xy[RIGHT_SHOULDER]) / 2
-    norm = float(np.linalg.norm(up))
-    return up / norm if norm > 1e-6 else None
+    center = person.xy[points].mean(axis=0)
+    neck = center - (person.xy[LEFT_SHOULDER] + person.xy[RIGHT_SHOULDER]) / 2
+    return Head(center, neck) if float(np.linalg.norm(neck)) > 1e-6 else None
+
+
+def body_up(person: Person, min_conf: float) -> np.ndarray | None:
+    """Unit vector shoulders -> head, or None if the shoulders or the head are not visible."""
+    head = head_of(person, min_conf)
+    return None if head is None else head.up
+
+
+def _face_elsewhere(xy: np.ndarray, conf: np.ndarray, head: Head, min_conf: float) -> bool:
+    """Whether the face found on the crop lies further than FACE_REACH necks from the head."""
+    face = [i for i in range(5) if conf[i] >= min_conf]
+    if not face:
+        return False
+    distance = float(np.linalg.norm(xy[face].mean(axis=0) - head.center))
+    return distance > FACE_REACH * float(np.linalg.norm(head.neck))
 
 
 def _overlap(a: np.ndarray, b: np.ndarray) -> bool:
@@ -150,7 +182,7 @@ class PoseDetector:
         self.min_person_conf = min_person_conf
         self.min_person_area = min_person_area
         self.imgsz = imgsz
-        self._memory: tuple[float, np.ndarray, np.ndarray] | None = None  # time, box, up
+        self._memory: tuple[float, np.ndarray, np.ndarray, Head] | None = None  # time, box, up, head
 
     def detect(
         self,
@@ -195,16 +227,17 @@ class PoseDetector:
         too, and the second pass the model is more sure of wins. If the fresh box and the
         remembered one do not touch, the larger box wins instead."""
         first = self.detect(frame)
-        up = body_up(first, min_conf) if first is not None else None
-        fresh = self._second_pass(frame, first.box, up) if up is not None else None
+        head = head_of(first, min_conf) if first is not None else None
+        up = None if head is None else head.up
+        fresh = self._second_pass(frame, first.box, up, head, min_conf) if head is not None else None
         best = fresh
         if self._memory is not None and now is not None and now - self._memory[0] <= MEMORY_SECONDS:
             # Also wins over a fresh detection that is something else (a glowing toy, a hand).
-            old = self._second_pass(frame, *self._memory[1:])
+            old = self._second_pass(frame, *self._memory[1:], min_conf)
             if old is not None and (best is None or self._prefer_remembered(first.box, fresh, old)):
                 best = old
         if fresh is not None and best is fresh and now is not None:
-            self._memory = (now, first.box, up)
+            self._memory = (now, first.box, up, head)
         if best is None and first is not None:
             return replace(first, up=up, checked=False)
         return best
@@ -217,7 +250,11 @@ class PoseDetector:
         # score does not decide here: the baby is the larger one, as in detect().
         return _area(old.box) > _area(box)
 
-    def _second_pass(self, frame: np.ndarray, box: np.ndarray, up: np.ndarray) -> Person | None:
+    def _second_pass(
+        self, frame: np.ndarray, box: np.ndarray, up: np.ndarray, head: Head | None = None, min_conf: float = 0.4
+    ) -> Person | None:
+        """The baby on a crop turned head-up, or None. With `head`, from the pass that gave `up`,
+        None also when the face found lies far from that head: then the crop found something else."""
         view = UprightView.around(box, up, self.imgsz)
         crop = cv2.warpAffine(frame, view.matrix(), (view.size, view.size))
         # The first pass already found the baby, so a lower person threshold is safe here: under
@@ -235,4 +272,6 @@ class PoseDetector:
         stray = _outside(xy, box) & ~unplaced
         conf[stray] = 0.0
         xy[unplaced | stray] = 0  # keypoints the model did not place, or that are not the baby's, stay at (0, 0)
+        if head is not None and _face_elsewhere(xy, conf, head, min_conf):
+            return None
         return Person(box, second.score, xy, conf, up)

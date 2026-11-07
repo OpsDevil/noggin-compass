@@ -1,4 +1,4 @@
-"""What the full code review of 2026-11-06 found, each pinned down so it cannot come back."""
+"""Bugs found in review, each pinned down so it cannot come back."""
 
 import json
 import os

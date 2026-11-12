@@ -3,6 +3,7 @@ import math
 import numpy as np
 import pytest
 
+from noggin_compass.config import HeadConfig
 from noggin_compass.head import Side, estimate_head
 
 R = 50.0
@@ -41,8 +42,8 @@ def synthetic_keypoints(yaw_deg: float, rotate_deg: float = 0.0, mirror: bool = 
     return xy, conf
 
 
-def estimate(xy, conf, **kw):
-    return estimate_head(xy, conf, min_conf=0.4, center_threshold=0.35, **kw)
+def estimate(xy, conf, body_up=None, **head):
+    return estimate_head(xy, conf, HeadConfig(**head), min_conf=0.4, body_up=body_up)
 
 
 @pytest.mark.parametrize(
@@ -121,6 +122,21 @@ def test_nose_and_eyes_only_gives_weak_estimate():
     result = estimate(xy, conf)
     assert result.side == Side.CENTER
     assert result.method == "nose_and_eyes"
+
+
+def test_eyes_only_gain_scales_the_nose_and_eyes_score():
+    xy, conf = synthetic_keypoints(10)
+    conf[3:5] = HIDDEN
+    weak, strong = estimate(xy, conf, eyes_only_gain=1.0), estimate(xy, conf, eyes_only_gain=2.0)
+    assert weak.method == strong.method == "nose_and_eyes"
+    assert strong.score == pytest.approx(2 * weak.score) and weak.score > 0
+
+
+def test_half_head_width_sets_where_a_turn_starts_with_one_ear():
+    xy, conf = synthetic_keypoints(30)  # the left ear is hidden by the turn
+    narrow, default, wide = (estimate(xy, conf, half_head_to_eye_dist=h) for h in (0.8, 1.2, 3.0))
+    assert default.method == "ear_and_eyes"
+    assert narrow.score > default.score > wide.score == 0.0
 
 
 def test_one_ear_with_the_face_almost_in_line_is_not_a_confident_profile():

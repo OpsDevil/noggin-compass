@@ -37,3 +37,13 @@ def test_unknown_option_names_itself(tmp_path):
     config.write_text("detector:\n  min_face_size: 0.015\n")
     with pytest.raises(ValueError, match="detector.min_face_size"):
         load_config(config)
+
+
+@pytest.mark.parametrize("option", ["detector.upright_margin", "head.half_head_to_eye_dist",
+                                    "motion.width", "sleep.min_frames"])
+def test_a_divisor_set_to_zero_is_refused_at_the_start(tmp_path, option):
+    section, name = option.split(".")
+    config = tmp_path / "config.yaml"
+    config.write_text(f"{section}:\n  {name}: 0\n")
+    with pytest.raises(ValueError, match=option):
+        load_config(config)

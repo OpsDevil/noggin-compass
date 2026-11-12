@@ -3,14 +3,15 @@ import math
 import numpy as np
 import pytest
 
-from noggin_compass.pose import MEMORY_SECONDS, Person, PoseDetector, UprightView, body_up, head_of
+from noggin_compass.config import DetectorConfig
+from noggin_compass.pose import Person, PoseDetector, UprightView, body_up, head_of
 
 
 @pytest.mark.parametrize("angle_deg", [0, 37, 90, 180, 270, -120])
 def test_upright_view_puts_head_on_top_and_maps_back(angle_deg):
     a = math.radians(angle_deg)
     up = np.array([math.cos(a), math.sin(a)])
-    view = UprightView.around(np.array([100.0, 200.0, 500.0, 400.0]), up, 640)
+    view = UprightView.around(np.array([100.0, 200.0, 500.0, 400.0]), up, 640, 1.3)
 
     rotated = view.rotation @ up
     assert rotated == pytest.approx([0.0, -1.0], abs=1e-9)
@@ -48,7 +49,7 @@ class ScriptedDetector(PoseDetector):
     """PoseDetector without a model: the first pass and each crop return what the test says."""
 
     def __init__(self):
-        self.imgsz = 64
+        self.cfg = DetectorConfig(imgsz=64)
         self._memory = None
         self.first = None
         self.crops = []  # second-pass results, in call order
@@ -85,8 +86,21 @@ def test_remembered_crop_used_when_first_pass_misses():
     assert person.up == pytest.approx([1.0, 0.0])
 
     det.crops = [Person(np.zeros(4), 0.3, np.ones((17, 2)), np.ones(17))]
-    assert det.detect_upright(FRAME, 0.4, now=MEMORY_SECONDS + 1) is None
+    assert det.detect_upright(FRAME, 0.4, now=det.cfg.memory_seconds + 1) is None
     assert det.crops, "the stale crop must not be tried"
+
+
+def test_memory_seconds_sets_how_long_the_old_crop_is_tried():
+    det = ScriptedDetector()
+    det.cfg.memory_seconds = 5
+    det.first = lying_baby(0.5)
+    det.crops = [Person(np.zeros(4), 0.4, np.ones((17, 2)), np.ones(17))]
+    det.detect_upright(FRAME, 0.4, now=0.0)
+
+    det.first = None
+    det.crops = [Person(np.zeros(4), 0.3, np.ones((17, 2)), np.ones(17))]
+    assert det.detect_upright(FRAME, 0.4, now=10.0) is None
+    assert det.crops, "the crop is older than the limit and must not be tried"
 
 
 def test_remembered_crop_beats_a_weaker_fresh_detection():
@@ -215,8 +229,8 @@ class _Model:
 
 def detector_seeing(boxes, min_person_area):
     det = object.__new__(PoseDetector)
-    det.model, det.device, det.imgsz = _Model(boxes), "cpu", 640
-    det.min_person_conf, det.min_person_area = 0.1, min_person_area
+    det.model = _Model(boxes)
+    det.cfg = DetectorConfig(min_person_conf=0.1, min_person_area=min_person_area)
     return det
 
 
@@ -245,7 +259,7 @@ def test_points_far_outside_the_babys_box_are_dropped():
     detector = ScriptedDetector()
     box = np.array([100.0, 100.0, 500.0, 300.0])
     up = np.array([1.0, 0.0])
-    view = UprightView.around(box, up, detector.imgsz)
+    view = UprightView.around(box, up, detector.cfg.imgsz, detector.cfg.upright_margin)
     matrix = view.matrix()
 
     def to_crop(points):
@@ -266,7 +280,7 @@ def test_a_face_far_from_the_head_is_not_the_babys():
     baby = lying_baby(0.9)  # head at (450, 200), shoulders at x = 350: the neck is 100 long
     head = head_of(baby, 0.4)
     box, up = baby.box, head.up
-    matrix = UprightView.around(box, up, detector.imgsz).matrix()
+    matrix = UprightView.around(box, up, detector.cfg.imgsz, detector.cfg.upright_margin).matrix()
 
     def crop_with_face_at(x, y):
         xy, conf = np.zeros((17, 2)), np.zeros(17)
@@ -275,7 +289,7 @@ def test_a_face_far_from_the_head_is_not_the_babys():
         return Person(np.zeros(4), 0.8, xy, conf)
 
     frame = np.zeros((400, 600, 3), np.uint8)
-    detector.crops = [crop_with_face_at(200.0, 290.0)]  # 270 away: more than FACE_REACH necks
+    detector.crops = [crop_with_face_at(200.0, 290.0)]  # 270 away: more than detector.face_reach necks
     assert detector._second_pass(frame, box, up, head, 0.4) is None
     detector.crops = [crop_with_face_at(440.0, 230.0)]  # the baby's own face, by the head
     assert detector._second_pass(frame, box, up, head, 0.4) is not None
@@ -287,7 +301,7 @@ def test_when_the_crop_finds_a_face_elsewhere_the_side_is_not_guessed():
     det = ScriptedDetector()
     det.first = lying_baby(0.5)
     xy, conf = np.zeros((17, 2)), np.zeros(17)
-    view = UprightView.around(det.first.box, np.array([1.0, 0.0]), det.imgsz)
+    view = UprightView.around(det.first.box, np.array([1.0, 0.0]), det.cfg.imgsz, det.cfg.upright_margin)
     matrix = view.matrix()
     xy[:3] = np.array([[150.0, 290.0]] * 3) @ matrix[:, :2].T + matrix[:, 2]
     conf[:3] = 0.9

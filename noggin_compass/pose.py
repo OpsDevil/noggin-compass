@@ -10,25 +10,9 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from .config import DetectorConfig
+
 LEFT_SHOULDER, RIGHT_SHOULDER = 5, 6
-# Size of the crop around the baby relative to its bounding box.
-UPRIGHT_MARGIN = 1.3
-UPRIGHT_PERSON_CONF = 0.1
-# On the crop, the baby is the one inside its own box: at least this share of the person found
-# there must lie in it. The crop's margin also holds what lies next to the baby, such as a toy with
-# a face of its own.
-WITHIN_SHARE = 0.5
-# Keypoints further outside the baby's box than this share of its size are not the baby's.
-OUTSIDE_MARGIN = 0.15
-# The face the crop finds must lie within this many neck lengths (shoulders to head) of where the
-# first pass saw the head. When the box is large enough to hold a toy next to the baby, the crop can
-# take the toy's face for the baby's, or put the face on a hand or a print on the sheet. The baby's
-# own face lies where the first pass saw the head, a toy by the crib side lies further away.
-FACE_REACH = 2.0
-# How long the crop of the last found baby is tried again. Seen from above in a sleep sack, the
-# baby is missed by the first pass on many frames, but a sleeping baby barely moves, so the old
-# crop still finds it. The limit stops a stale crop from outliving a real change of position.
-MEMORY_SECONDS = 60
 MODELS_DIR = Path("models")
 
 
@@ -56,12 +40,13 @@ class UprightView:
     size: int
 
     @classmethod
-    def around(cls, box: np.ndarray, up: np.ndarray, size: int) -> UprightView:
+    def around(cls, box: np.ndarray, up: np.ndarray, size: int, margin: float) -> UprightView:
+        """The crop covers `margin` times the longer side of the box."""
         # Rotate so that the shoulders -> head direction becomes (0, -1), i.e. up in the image.
         angle = -math.pi / 2 - math.atan2(up[1], up[0])
         cos, sin = math.cos(angle), math.sin(angle)
         x1, y1, x2, y2 = box
-        scale = size / (UPRIGHT_MARGIN * max(x2 - x1, y2 - y1))
+        scale = size / (margin * max(x2 - x1, y2 - y1))
         return cls(np.array([[cos, -sin], [sin, cos]]), scale, np.array([(x1 + x2) / 2, (y1 + y2) / 2]), size)
 
     def matrix(self) -> np.ndarray:
@@ -113,13 +98,13 @@ def body_up(person: Person, min_conf: float) -> np.ndarray | None:
     return None if head is None else head.up
 
 
-def _face_elsewhere(xy: np.ndarray, conf: np.ndarray, head: Head, min_conf: float) -> bool:
-    """Whether the face found on the crop lies further than FACE_REACH necks from the head."""
+def _face_elsewhere(xy: np.ndarray, conf: np.ndarray, head: Head, min_conf: float, reach: float) -> bool:
+    """Whether the face found on the crop lies further than `reach` necks from the head."""
     face = [i for i in range(5) if conf[i] >= min_conf]
     if not face:
         return False
     distance = float(np.linalg.norm(xy[face].mean(axis=0) - head.center))
-    return distance > FACE_REACH * float(np.linalg.norm(head.neck))
+    return distance > reach * float(np.linalg.norm(head.neck))
 
 
 def _overlap(a: np.ndarray, b: np.ndarray) -> bool:
@@ -138,10 +123,10 @@ def _share_inside(box: np.ndarray, outer: np.ndarray) -> float:
     return max(0.0, width) * max(0.0, height) / max(_area(box), 1e-6)
 
 
-def _outside(xy: np.ndarray, box: np.ndarray) -> np.ndarray:
-    """Which points lie outside the box widened by OUTSIDE_MARGIN of its size."""
+def _outside(xy: np.ndarray, box: np.ndarray, margin: float) -> np.ndarray:
+    """Which points lie outside the box widened by `margin` of its size."""
     x1, y1, x2, y2 = box
-    mx, my = OUTSIDE_MARGIN * (x2 - x1), OUTSIDE_MARGIN * (y2 - y1)
+    mx, my = margin * (x2 - x1), margin * (y2 - y1)
     return (xy[:, 0] < x1 - mx) | (xy[:, 0] > x2 + mx) | (xy[:, 1] < y1 - my) | (xy[:, 1] > y2 + my)
 
 
@@ -157,14 +142,9 @@ def _disable_telemetry() -> None:
 
 
 class PoseDetector:
-    def __init__(
-        self,
-        model: str,
-        device: str = "cpu",
-        min_person_conf: float = 0.35,
-        imgsz: int = 640,
-        min_person_area: float = 0.0,
-    ):
+    def __init__(self, cfg: DetectorConfig):
+        """Every threshold is read from `cfg` (the detector section of the settings) when used."""
+        model = cfg.model
         if not Path(model).exists() and Path(model).parent == Path("."):
             # A bare name like yolo26m-pose.pt: ultralytics will download it, so keep it in models/.
             model = str(MODELS_DIR / model)
@@ -178,10 +158,7 @@ class PoseDetector:
         Path(model).parent.mkdir(parents=True, exist_ok=True)
         # If the file is missing, ultralytics downloads the weights from GitHub once.
         self.model = YOLO(model)
-        self.device = device
-        self.min_person_conf = min_person_conf
-        self.min_person_area = min_person_area
-        self.imgsz = imgsz
+        self.cfg = cfg
         self._memory: tuple[float, np.ndarray, np.ndarray, Head] | None = None  # time, box, up, head
 
     def detect(
@@ -192,11 +169,12 @@ class PoseDetector:
         within: np.ndarray | None = None,
     ) -> Person | None:
         """The largest person in the frame or, with `within`, the largest of those that lie at
-        least WITHIN_SHARE in that box."""
-        conf = self.min_person_conf if min_person_conf is None else min_person_conf
-        min_area = self.min_person_area if min_person_area is None else min_person_area
+        least detector.within_share in that box."""
+        cfg = self.cfg
+        conf = cfg.min_person_conf if min_person_conf is None else min_person_conf
+        min_area = cfg.min_person_area if min_person_area is None else min_person_area
         result = self.model.predict(
-            frame, conf=conf, device=self.device, imgsz=self.imgsz, verbose=False
+            frame, conf=conf, device=cfg.device, imgsz=cfg.imgsz, verbose=False
         )[0]
         if result.keypoints is None or result.boxes is None or len(result.boxes) == 0:
             return None
@@ -206,7 +184,7 @@ class PoseDetector:
         # rail, a strip of the rail at the edge of the frame. They are far smaller than a baby.
         areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
         if within is not None:
-            areas = np.where([_share_inside(b, within) >= WITHIN_SHARE for b in boxes], areas, 0.0)
+            areas = np.where([_share_inside(b, within) >= cfg.within_share for b in boxes], areas, 0.0)
             if not areas.any():
                 return None
         if areas.max() < min_area * frame.shape[0] * frame.shape[1]:
@@ -223,7 +201,7 @@ class PoseDetector:
         baby and its shoulders. The second runs on a crop rotated head-up, where the face is
         detected much better. Keypoints are returned in source frame coordinates.
 
-        With `now` (seconds), the crop of the last baby found in the past MEMORY_SECONDS is tried
+        With `now` (seconds), the crop of the last baby found in the past detector.memory_seconds is tried
         too, and the second pass the model is more sure of wins. If the fresh box and the
         remembered one do not touch, the larger box wins instead."""
         first = self.detect(frame)
@@ -231,7 +209,7 @@ class PoseDetector:
         up = None if head is None else head.up
         fresh = self._second_pass(frame, first.box, up, head, min_conf) if head is not None else None
         best = fresh
-        if self._memory is not None and now is not None and now - self._memory[0] <= MEMORY_SECONDS:
+        if self._memory is not None and now is not None and now - self._memory[0] <= self.cfg.memory_seconds:
             # Also wins over a fresh detection that is something else (a glowing toy, a hand).
             old = self._second_pass(frame, *self._memory[1:], min_conf)
             if old is not None and (best is None or self._prefer_remembered(first.box, fresh, old)):
@@ -255,12 +233,13 @@ class PoseDetector:
     ) -> Person | None:
         """The baby on a crop turned head-up, or None. With `head`, from the pass that gave `up`,
         None also when the face found lies far from that head: then the crop found something else."""
-        view = UprightView.around(box, up, self.imgsz)
+        cfg = self.cfg
+        view = UprightView.around(box, up, cfg.imgsz, cfg.upright_margin)
         crop = cv2.warpAffine(frame, view.matrix(), (view.size, view.size))
         # The first pass already found the baby, so a lower person threshold is safe here: under
         # a blanket, person confidence on the crop can be low. Keypoint confidences from the first
         # pass are not trusted: it is confidently wrong on a baby lying across the frame.
-        second = self.detect(crop, min_person_conf=UPRIGHT_PERSON_CONF, min_person_area=0.0,
+        second = self.detect(crop, min_person_conf=cfg.upright_person_conf, min_person_area=0.0,
                              within=view.box_in_crop(box))
         if second is None:
             return None
@@ -269,9 +248,9 @@ class PoseDetector:
         unplaced = ~second.xy.any(axis=1)
         # The model can place a point well outside the person it found: such a point is not the
         # baby's, and a nose on a toy would decide the side.
-        stray = _outside(xy, box) & ~unplaced
+        stray = _outside(xy, box, cfg.outside_margin) & ~unplaced
         conf[stray] = 0.0
         xy[unplaced | stray] = 0  # keypoints the model did not place, or that are not the baby's, stay at (0, 0)
-        if head is not None and _face_elsewhere(xy, conf, head, min_conf):
+        if head is not None and _face_elsewhere(xy, conf, head, min_conf, cfg.face_reach):
             return None
         return Person(box, second.score, xy, conf, up)

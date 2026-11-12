@@ -20,15 +20,10 @@ from enum import StrEnum
 
 import numpy as np
 
+from .config import HeadConfig
 from .i18n import t
 
 NOSE, LEFT_EYE, RIGHT_EYE, LEFT_EAR, RIGHT_EAR, LEFT_SHOULDER, RIGHT_SHOULDER = range(7)
-
-# Half the head width in units of the eye distance (~1.2 for adults and infants alike).
-HALF_HEAD_TO_EYE_DIST = 1.2
-# Gain for the "nose vs eyes" fallback: the nose shifts much less relative to the eyes than the
-# face does relative to the ears. A rough guess; tune it on recordings from the real camera.
-EYES_ONLY_GAIN = 3.0
 
 
 class Side(StrEnum):
@@ -105,15 +100,14 @@ def left_of(up, mirrored: bool) -> np.ndarray:
 def estimate_head(
     xy: np.ndarray,
     conf: np.ndarray,
+    cfg: HeadConfig,
     *,
     min_conf: float,
-    center_threshold: float,
-    mirrored: bool = False,
-    fallback_head_direction: str = "up",
     body_up: np.ndarray | None = None,
 ) -> HeadEstimate:
-    """body_up: unit vector shoulders -> head found earlier (on the first detector pass), used
-    when the shoulders are not visible now. fallback_head_direction is the last resort."""
+    """cfg: the head section of the settings. body_up: unit vector shoulders -> head found earlier
+    (on the first detector pass), used when the shoulders are not visible now;
+    head.fallback_head_direction is the last resort."""
     xy = np.asarray(xy, dtype=float)
     visible = np.asarray(conf, dtype=float) >= min_conf
     both_eyes = bool(visible[LEFT_EYE] and visible[RIGHT_EYE])
@@ -124,9 +118,9 @@ def estimate_head(
     face_idx = [i for i in (NOSE, LEFT_EYE, RIGHT_EYE) if visible[i]]
     ear_idx = [i for i in (LEFT_EAR, RIGHT_EAR) if visible[i]]
     head_center = xy[face_idx + ear_idx].mean(axis=0)
-    up, axis_source = _body_axis(xy, visible, head_center, body_up, fallback_head_direction)
+    up, axis_source = _body_axis(xy, visible, head_center, body_up, cfg.fallback_head_direction)
 
-    toward_left = left_of(up, mirrored)
+    toward_left = left_of(up, cfg.mirrored)
 
     def lat(point: np.ndarray) -> float:
         return float(np.dot(point, toward_left))
@@ -149,8 +143,8 @@ def estimate_head(
         if eye_dist > 1e-6:
             # Facing the camera, face to ear is ~half the head width. The further beyond that,
             # the stronger the turn (the other ear is then hidden in the mattress).
-            excess = abs(offset) / eye_dist - HALF_HEAD_TO_EYE_DIST
-            score = float(np.sign(offset)) * max(0.0, excess) / HALF_HEAD_TO_EYE_DIST
+            excess = abs(offset) / eye_dist - cfg.half_head_to_eye_dist
+            score = float(np.sign(offset)) * max(0.0, excess) / cfg.half_head_to_eye_dist
             method = "ear_and_eyes"
         else:
             # Without the eyes for scale, the direction from the ear to the face tells: well to the
@@ -162,7 +156,7 @@ def estimate_head(
             method = "one_ear_profile"
     elif visible[NOSE] and eye_dist > 1e-6:
         eyes_mid = (lat(xy[LEFT_EYE]) + lat(xy[RIGHT_EYE])) / 2
-        score = EYES_ONLY_GAIN * (lat(xy[NOSE]) - eyes_mid) / eye_dist
+        score = cfg.eyes_only_gain * (lat(xy[NOSE]) - eyes_mid) / eye_dist
         method = "nose_and_eyes"
     else:
         return HeadEstimate(
@@ -171,7 +165,7 @@ def estimate_head(
 
     score = float(np.clip(score, -1.0, 1.0))
     return HeadEstimate(
-        classify(score, center_threshold),
+        classify(score, cfg.center_threshold),
         score,
         method=method,
         axis_source=axis_source,

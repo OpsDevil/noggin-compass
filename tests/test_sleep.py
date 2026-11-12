@@ -47,6 +47,13 @@ def test_minute_without_movement_data_is_missing():
     assert classify_minutes(samples, CFG) == {T0: Minute.MISSING}
 
 
+def test_min_frames_sets_how_many_measurements_a_minute_needs():
+    # A frame every 20 seconds: three measurements a minute.
+    samples = [(T0 + timedelta(seconds=s), Side.RIGHT, STILL) for s in (0, 20, 40)]
+    assert classify_minutes(samples, CFG) == {T0: Minute.MISSING}
+    assert classify_minutes(samples, SleepConfig(min_frames=3)) == {T0: Minute.STILL}
+
+
 def test_falls_asleep_after_still_minutes_and_dates_it_back():
     periods = find_sleep(frames("mmm" + "s" * 30 + "m" * 7), CFG)
     assert len(periods) == 1

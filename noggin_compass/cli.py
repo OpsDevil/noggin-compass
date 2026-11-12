@@ -68,13 +68,7 @@ def analyze(
         # wrong about the face points, so the side is not guessed: the baby is still there.
         return HeadEstimate(Side.UNKNOWN, method="unchecked"), person
     estimate = estimate_head(
-        person.xy,
-        person.conf,
-        min_conf=cfg.detector.min_keypoint_conf,
-        center_threshold=cfg.head.center_threshold,
-        mirrored=cfg.head.mirrored,
-        fallback_head_direction=cfg.head.fallback_head_direction,
-        body_up=person.up,
+        person.xy, person.conf, cfg.head, min_conf=cfg.detector.min_keypoint_conf, body_up=person.up
     )
     return estimate, person
 
@@ -130,13 +124,7 @@ def run(cfg: Config, args: argparse.Namespace) -> None:
         cfg.detector.device = args.device
     source_spec = args.source if args.source is not None else cfg.camera.source
     source = open_source(source_spec, start=args.start, password=cfg.camera.password)
-    detector = PoseDetector(
-        cfg.detector.model,
-        cfg.detector.device,
-        cfg.detector.min_person_conf,
-        cfg.detector.imgsz,
-        cfg.detector.min_person_area,
-    )
+    detector = PoseDetector(cfg.detector)
     presence = None
     if cfg.presence.enabled:
         # Imported here: it loads transformers, which takes a few seconds.
@@ -167,7 +155,7 @@ def run(cfg: Config, args: argparse.Namespace) -> None:
                                          cfg.thermometers.every_minutes, cfg.thermometers.scan_seconds, watch)
         siren = Siren(watch, cfg.thermometers.cold)
     tracker = SideTracker(cfg.tracking.confirm_seconds, cfg.tracking.gap_seconds)
-    motion_meter = MotionMeter()
+    motion_meter = MotionMeter(cfg.motion)
     monitor = monitor_from_config(cfg)
     notifier.start()
     if thermometers is not None:
@@ -317,12 +305,7 @@ def load_snapshot(path: Path, cfg: Config) -> Frame:
     # Snapshots saved before the axis was stored: recompute it. Without the first pass axis, on a
     # frame without shoulders the arrow follows head.fallback_head_direction.
     estimate.axis = estimate_head(
-        shot.person.xy,
-        shot.person.conf,
-        min_conf=cfg.detector.min_keypoint_conf,
-        center_threshold=cfg.head.center_threshold,
-        mirrored=cfg.head.mirrored,
-        fallback_head_direction=cfg.head.fallback_head_direction,
+        shot.person.xy, shot.person.conf, cfg.head, min_conf=cfg.detector.min_keypoint_conf
     ).axis
     return shot
 

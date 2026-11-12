@@ -562,16 +562,25 @@ uv run noggin-compass run --preview --model yolo26s-pose.pt
 
 The names follow `yolo11{n,s,m,l,x}-pose.pt` and `yolo26{n,s,m,l,x}-pose.pt`: `n` is the fastest
 and least accurate, `x` the slowest and most accurate on standard benchmarks. A baby lying across
-the frame is not a standard benchmark, though. On 28 hand-labelled frames from our camera:
+the frame is not a standard benchmark, though. On 796 hand-labelled frames from our camera (500
+picked at random and 298 where the program had found no face), one frame at a time, with
+`imgsz: 1280`:
 
-| Model | Correct | Time per frame (Apple GPU) |
+| Model | Person thresholds 0.15 and 0.10 | Person thresholds 0.01 and 0.02 |
 |---|---|---|
-| **yolo11s-pose** (default) | **27 of 28** | 59 ms |
-| yolo26s-pose | 14 of 28 | 59 ms |
-| yolo26l-pose | 16 of 28 | 138 ms |
+| **yolo11s-pose** (default) | 76% / 38% | 80% / 66% |
+| yolo26s-pose | 57% / 44% | 78% / 66% |
+| yolo11l-pose | 85% / 62% | 82% / 66% |
+| yolo26l-pose | 73% / 57% | 83% / 74% |
 
-The newer generation often missed clear head turns or did not find the baby at all, so the
-default stays `yolo11s`. You can also point `detector.model` at your own fine-tuned file.
+Each cell is the share of correct answers on the random frames and on the hard ones. The first
+threshold is `detector.min_person_conf`, the second `detector.upright_person_conf`.
+
+With low person thresholds the small models are level, and the large YOLO26 is ahead on the hard
+frames. YOLO26 is less sure than YOLO11 that a baby under a blanket, seen from above, is a person,
+so with higher thresholds it loses more frames: lower both thresholds when you switch to it. The
+large models take two to three times longer per frame, so the default stays `yolo11s`. You can
+also point `detector.model` at your own fine-tuned file.
 
 ## CPU or GPU
 

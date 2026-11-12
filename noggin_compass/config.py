@@ -45,11 +45,34 @@ class DetectorConfig:
     # found much more reliably when the baby lies across the frame.
     upright: bool = True
     min_person_conf: float = 0.35
+    # The same on the head-up crop of the second pass. The first pass already found the baby there,
+    # so it is lower.
+    upright_person_conf: float = 0.1
     # A person smaller than this share of the frame (after camera.roi) is ignored. With the frame
     # cropped to the crib, a baby takes a far larger share than the "people" the network finds in
     # an empty crib (toys, the rail, the sheet print).
     min_person_area: float = 0.06
     min_keypoint_conf: float = 0.4
+    # The crop of the second pass is this many times the longer side of the baby's box. Larger
+    # keeps a head that sticks out of the box in the crop, but the baby gets smaller in it.
+    upright_margin: float = 1.3
+    # On the crop, the baby is the one inside its own box: at least this share of the person found
+    # there must lie in it. The crop's margin also holds what lies next to the baby, such as a toy
+    # with a face of its own.
+    within_share: float = 0.5
+    # Keypoints further outside the baby's box than this share of its size are not the baby's.
+    outside_margin: float = 0.15
+    # The face the crop finds must lie within this many neck lengths (shoulders to head) of where
+    # the first pass saw the head. When the box is large enough to hold a toy next to the baby, the
+    # crop can take the toy's face for the baby's, or put the face on a hand or a print on the
+    # sheet. The baby's own face lies where the first pass saw the head, a toy by the crib side
+    # lies further away.
+    face_reach: float = 2.0
+    # How long, in seconds, the crop of the last found baby is tried again. Seen from above in a
+    # sleep sack, the baby is missed by the first pass on many frames, but a sleeping baby barely
+    # moves, so the old crop still finds it. The limit stops a stale crop from outliving a real
+    # change of position.
+    memory_seconds: float = 60
 
 
 @dataclass
@@ -76,6 +99,12 @@ class HeadConfig:
     mirrored: bool = False
     # Where the top of the head points in the frame if the shoulders are hidden: up/down/left/right.
     fallback_head_direction: str = "up"
+    # Half the head width in units of the eye distance (~1.2 for adults and infants alike). With
+    # one ear and both eyes visible, a face further from the ear than this is a turned head.
+    half_head_to_eye_dist: float = 1.2
+    # Gain for the "nose vs eyes" estimate, used when no ear is visible: the nose shifts much less
+    # relative to the eyes than the face does relative to the ears.
+    eyes_only_gain: float = 3.0
 
 
 @dataclass
@@ -121,12 +150,28 @@ class TelegramConfig:
 
 
 @dataclass
+class MotionConfig:
+    # Width the frame is shrunk to before two frames are compared. Movement of arms and legs is
+    # still visible, while video noise and compression artifacts mostly average out.
+    width: int = 320
+    # Brightness change (0-255, after blur) that counts as movement of a pixel.
+    pixel_threshold: int = 12
+    # The baby's box is widened by this share of its size, so that a hand or a foot sticking out
+    # of it still counts.
+    box_margin: float = 0.15
+    # A previous frame older than this many seconds (after a reconnect) is too old to compare with.
+    max_gap_seconds: float = 5.0
+
+
+@dataclass
 class SleepConfig:
     # A frame counts as movement when this share of the baby's area changed since the previous one.
     frame_motion: float = 0.02
     # A minute is restless when at least this share of its frames had movement. A sleeping baby
     # twitches, and a parent's hand or a light from the door adds more.
     restless_share: float = 0.3
+    # A minute needs at least this many movement measurements, otherwise it counts as missing.
+    min_frames: int = 5
     # Asleep after fall_asleep_minutes still minutes within fall_asleep_window_minutes; the sleep
     # starts at the first of them. Falling asleep in the day, a baby waves its arms with eyes
     # closed, so a short nap may never have the whole window still.
@@ -247,6 +292,7 @@ class Config:
     tracking: TrackingConfig = field(default_factory=TrackingConfig)
     alerts: AlertsConfig = field(default_factory=AlertsConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
+    motion: MotionConfig = field(default_factory=MotionConfig)
     sleep: SleepConfig = field(default_factory=SleepConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     thermometers: ThermometersConfig = field(default_factory=ThermometersConfig)
@@ -296,9 +342,13 @@ def _apply(obj: Any, data: dict[str, Any], path: str = "") -> None:
 
 
 # Options where 0 or less would stop the program from working, for example read the thermometers
-# in a tight loop with no pause.
+# in a tight loop with no pause, or divide by zero.
 POSITIVE = (
     "camera.sample_fps",
+    "detector.upright_margin",
+    "head.half_head_to_eye_dist",
+    "motion.width",
+    "sleep.min_frames",
     "thermometers.every_minutes",
     "thermometers.scan_seconds",
     "thermometers.lost_minutes",

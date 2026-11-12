@@ -17,8 +17,6 @@ from .i18n import t
 from .report import day_bounds, day_of, fmt_duration
 
 MINUTE = timedelta(minutes=1)
-# A minute needs at least this many movement measurements, otherwise it counts as missing.
-MIN_FRAMES = 5
 # A pause in the data shorter than this (the program restarted, the camera reconnected) does not
 # end a sleep: if the baby woke up meanwhile, the restless minutes after it show that. A longer
 # one ends the sleep where the data stopped: we don't know what happened.
@@ -120,7 +118,7 @@ def classify_minutes(
             minutes[minute] = Minute.OUT
             continue
         motions = [m for _, m in rows if m is not None]
-        if len(motions) < MIN_FRAMES:
+        if len(motions) < cfg.min_frames:
             minutes[minute] = Minute.MISSING
             continue
         moving = sum(m >= cfg.frame_motion for m in motions) / len(motions)

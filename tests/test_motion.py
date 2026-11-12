@@ -5,10 +5,12 @@ import numpy as np
 import pytest
 
 from noggin_compass.head import HeadEstimate, Side
-from noggin_compass.motion import MAX_GAP_SECONDS, MotionMeter
+from noggin_compass.config import MotionConfig
+from noggin_compass.motion import MotionMeter
 from noggin_compass.storage import Storage
 
 BOX = np.array([200.0, 100.0, 440.0, 380.0])
+CFG = MotionConfig()
 
 
 def scene(brightness: int = 100) -> np.ndarray:
@@ -18,30 +20,45 @@ def scene(brightness: int = 100) -> np.ndarray:
 
 
 def test_still_baby_does_not_move():
-    meter = MotionMeter()
+    meter = MotionMeter(CFG)
     assert meter.update(scene(), BOX, 0.0) is None  # nothing to compare with yet
     assert meter.update(scene(), BOX, 1.0) == 0.0
 
 
 def test_moving_arm_counts():
-    meter = MotionMeter()
+    meter = MotionMeter(CFG)
     meter.update(scene(), BOX, 0.0)
     moved = scene()
     moved[200:260, 390:430] = 250  # an arm thrown out to the side
     assert meter.update(moved, BOX, 1.0) > 0.02
 
 
+def test_pixel_threshold_decides_what_counts_as_movement():
+    moved = scene()
+    moved[200:260, 390:430] = 130  # a faint change next to the baby
+    for threshold, moves in ((12, True), (60, False)):
+        meter = MotionMeter(MotionConfig(pixel_threshold=threshold))
+        meter.update(scene(), BOX, 0.0)
+        assert (meter.update(moved, BOX, 1.0) > 0) is moves
+
+
+def test_frames_further_apart_than_the_gap_are_compared_when_the_gap_is_raised():
+    meter = MotionMeter(MotionConfig(max_gap_seconds=30))
+    meter.update(scene(), BOX, 0.0)
+    assert meter.update(scene(), BOX, 20.0) == 0.0
+
+
 def test_whole_picture_getting_brighter_is_not_movement():
-    meter = MotionMeter()
+    meter = MotionMeter(CFG)
     meter.update(scene(100), BOX, 0.0)
     assert meter.update(scene(130), BOX, 1.0) == pytest.approx(0.0, abs=0.01)
 
 
 def test_no_baby_or_old_frame_gives_none():
-    meter = MotionMeter()
+    meter = MotionMeter(CFG)
     meter.update(scene(), BOX, 0.0)
     assert meter.update(scene(), None, 1.0) is None
-    assert meter.update(scene(), BOX, 2.0 + MAX_GAP_SECONDS) is None
+    assert meter.update(scene(), BOX, 2.0 + CFG.max_gap_seconds) is None
 
 
 def test_storage_adds_motion_column_to_old_database(tmp_path):

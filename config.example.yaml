@@ -28,8 +28,16 @@ detector:
   imgsz: 640                # picture size for the network; 1280 for an overhead camera
   upright: true             # second pass on a crop with the baby turned head-up
   min_person_conf: 0.35     # how sure the network must be that it sees a person
+  upright_person_conf: 0.1  # the same on the head-up crop of the second pass
   min_person_area: 0.06     # a "person" smaller than this share of the frame is ignored
   min_keypoint_conf: 0.4    # keypoints below this confidence are ignored
+  # The second pass in detail. The defaults suit a crib seen from above; see the README before
+  # changing them.
+  upright_margin: 1.3       # the crop is this many times the longer side of the baby's box
+  within_share: 0.5         # on the crop, the baby is the person with this share inside its box
+  outside_margin: 0.15      # keypoints further outside the box than this share of it are dropped
+  face_reach: 2.0           # the face must lie within this many neck lengths of the head
+  memory_seconds: 60        # how long the crop of the last baby found is tried again
 
 presence:
   # A second network looks at the whole frame and says whether the baby is in the crib at all, so
@@ -45,6 +53,8 @@ head:
   mirrored: false           # true if the camera picture is mirrored
   fallback_head_direction: up   # where the top of the head points when shoulders are not visible:
                                 # up, down, left or right
+  half_head_to_eye_dist: 1.2    # half the head width in eye distances, for one ear and both eyes
+  eyes_only_gain: 3.0           # how strongly the nose off the middle of the eyes counts, no ears
 
 tracking:
   confirm_seconds: 10       # a new head position counts after holding this long
@@ -74,11 +84,19 @@ telegram:
   # Off by default: the pictures go through Telegram.
   photos: false
 
+motion:
+  # How movement between two frames is measured; sleep is told from it.
+  width: 320                # the frame is shrunk to this width before two frames are compared
+  pixel_threshold: 12       # brightness change (0-255) that counts as movement of a pixel
+  box_margin: 0.15          # the baby's box is widened by this share to catch a hand or a foot
+  max_gap_seconds: 5        # frames further apart than this are not compared
+
 sleep:
   # Sleep is told from movement: a baby lying still for a while is asleep. Lying still with open
   # eyes also counts as sleep, and only the crib is seen.
   frame_motion: 0.02        # a frame counts as movement when this share of the baby's area changed
   restless_share: 0.3       # a minute is restless when this share of its frames had movement
+  min_frames: 5             # a minute with fewer movement measurements counts as missing
   fall_asleep_minutes: 8    # asleep after this many still minutes...
   fall_asleep_window_minutes: 10  # ...within this many minutes
   wake_minutes: 7           # awake after this many restless minutes...

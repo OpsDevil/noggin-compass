@@ -23,6 +23,7 @@ camera:
 detector:
   # Ultralytics pose model: a file path or a name. A name that is not in models/ yet is
   # downloaded there automatically on the next run, e.g. yolo26s-pose.pt or yolo11m-pose.pt.
+  # rtmo-s, rtmo-m or rtmo-l is an RTMO model instead (OpenMMLab, runs on the CPU), see README.
   model: models/yolo11s-pose.pt
   device: cpu               # cpu, mps (Apple Silicon GPU) or 0 (first NVIDIA GPU)
   imgsz: 640                # picture size for the network; 1280 for an overhead camera

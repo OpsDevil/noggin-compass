@@ -1,4 +1,5 @@
-"""Person and keypoint detection (YOLO pose, 17 COCO keypoints). Everything runs locally."""
+"""Person and keypoint detection (a YOLO or RTMO pose model, 17 COCO keypoints). Everything runs
+locally."""
 
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ import cv2
 import numpy as np
 
 from .config import DetectorConfig
+from .rtmo import Rtmo, is_rtmo, weights
 
 LEFT_SHOULDER, RIGHT_SHOULDER = 5, 6
 MODELS_DIR = Path("models")
@@ -141,9 +143,10 @@ def _disable_telemetry() -> None:
         pass
 
 
-class PoseDetector:
+class Yolo:
+    """An Ultralytics YOLO pose model."""
+
     def __init__(self, cfg: DetectorConfig):
-        """Every threshold is read from `cfg` (the detector section of the settings) when used."""
         model = cfg.model
         if not Path(model).exists() and Path(model).parent == Path("."):
             # A bare name like yolo26m-pose.pt: ultralytics will download it, so keep it in models/.
@@ -159,6 +162,26 @@ class PoseDetector:
         # If the file is missing, ultralytics downloads the weights from GitHub once.
         self.model = YOLO(model)
         self.cfg = cfg
+
+    def __call__(self, frame: np.ndarray, min_score: float):
+        """Boxes (n, 4), scores (n,), keypoints (n, 17, 2) in pixels of `frame` and their
+        confidences (n, 17) of the people found, or None."""
+        cfg = self.cfg
+        result = self.model.predict(frame, conf=min_score, device=cfg.device, imgsz=cfg.imgsz, verbose=False)[0]
+        if result.keypoints is None or result.boxes is None or len(result.boxes) == 0:
+            return None
+        keypoints = result.keypoints
+        xy = keypoints.xy.cpu().numpy()
+        conf = keypoints.conf.cpu().numpy() if keypoints.conf is not None else np.ones(xy.shape[:2])
+        return result.boxes.xyxy.cpu().numpy(), result.boxes.conf.cpu().numpy(), xy, conf
+
+
+class PoseDetector:
+    def __init__(self, cfg: DetectorConfig):
+        """Every threshold is read from `cfg` (the detector section of the settings) when used.
+        A detector.model whose name starts with rtmo is an RTMO model, any other a YOLO one."""
+        self.network = Rtmo(weights(cfg.model, MODELS_DIR)) if is_rtmo(cfg.model) else Yolo(cfg)
+        self.cfg = cfg
         self._memory: tuple[float, np.ndarray, np.ndarray, Head] | None = None  # time, box, up, head
 
     def detect(
@@ -173,12 +196,10 @@ class PoseDetector:
         cfg = self.cfg
         conf = cfg.min_person_conf if min_person_conf is None else min_person_conf
         min_area = cfg.min_person_area if min_person_area is None else min_person_area
-        result = self.model.predict(
-            frame, conf=conf, device=cfg.device, imgsz=cfg.imgsz, verbose=False
-        )[0]
-        if result.keypoints is None or result.boxes is None or len(result.boxes) == 0:
+        found = self.network(frame, conf)
+        if found is None:
             return None
-        boxes = result.boxes.xyxy.cpu().numpy()
+        boxes, scores, xy, keypoint_conf = found
         # In a crib, the person we want is the largest one in the frame. With the low person
         # threshold a sleep sack needs, the empty crib also yields small "people": a toy on the
         # rail, a strip of the rail at the edge of the frame. They are far smaller than a baby.
@@ -190,10 +211,7 @@ class PoseDetector:
         if areas.max() < min_area * frame.shape[0] * frame.shape[1]:
             return None
         i = int(areas.argmax())
-        keypoints = result.keypoints
-        xy = keypoints.xy[i].cpu().numpy()
-        conf = keypoints.conf[i].cpu().numpy() if keypoints.conf is not None else np.ones(len(xy))
-        return Person(boxes[i], float(result.boxes.conf[i]), xy, conf)
+        return Person(boxes[i], float(scores[i]), xy[i], keypoint_conf[i])
 
     def detect_upright(self, frame: np.ndarray, min_conf: float, now: float | None = None) -> Person | None:
         """Two passes. The model was trained on standing and sitting people and confuses face

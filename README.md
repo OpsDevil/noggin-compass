@@ -15,7 +15,7 @@
 
 <p align="center">
   <img src="docs/demo.webp" alt="Time-lapse from above of a baby asleep in the crib from 02:02 to 02:38, with the detected points: the verdict RIGHT changes to LEFT when the baby turns the head" width="820">
-  <br><sub>36 minutes of one night, 400x faster: at 02:15 the baby turns the head and RIGHT changes to LEFT.</sub>
+  <br><sub>Time-lapse of one night from 02:02 to 02:38. At 02:15 the baby turns the head, and the program's answer changes from "right" to "left".</sub>
 </p>
 
 ---
@@ -25,11 +25,14 @@
 Many babies develop a favourite side to sleep on. If the head almost always rests on the same
 spot, that spot can flatten over time (positional plagiocephaly), and a strong preference can
 also be a sign of a tight neck muscle (torticollis). Paediatricians usually suggest alternating
-the head position, but at 3 a.m. nobody knows how the night actually went.
+the head position. But nobody can keep track of it at night, and in the morning it is hard to
+say which side the baby spent longer on.
 
-**noggin-compass** answers that with numbers: *"last night: left 5 h 10 min (68%), right
-1 h 45 min (23%), straight 40 min"*, plus a minute-by-minute timeline, so you can see whether
-repositioning helps.
+**noggin-compass** counts it for you: *"last night: left 5 h 10 min (68%), right 1 h 45 min (23%),
+straight 40 min"*, plus a minute-by-minute timeline. The numbers show which side the baby prefers,
+so you can turn the baby to the other side more often. If the share of the favourite side goes
+down over the next nights, repositioning helps. The program can also tell you in Telegram when the
+head has rested on one side for too long, see [Turn alerts and Telegram](#turn-alerts-and-telegram).
 
 > [!IMPORTANT]
 > This is a hobby project, **not a medical device and not a baby monitor**. It does not watch
@@ -54,7 +57,7 @@ picture.
 ```mermaid
 flowchart TD
     cam["Wi-Fi camera<br/>RTSP, 1 frame per second"] --> crop["Crop to the crib"]
-    subgraph nn ["YOLO pose, two passes"]
+    subgraph nn ["Pose model, two passes"]
         pass1["Pass 1: find the baby<br/>and the shoulder line"] --> rotate["Rotate the crop<br/>so the head points up"]
         rotate --> pass2["Pass 2: nose, eyes, ears"]
         memory["Or the crop of the baby<br/>found in the last minute"] --> pass2
@@ -66,8 +69,9 @@ flowchart TD
     db --> report["Nightly report"]
 ```
 
-* **Keypoints.** An off-the-shelf [Ultralytics YOLO pose](https://docs.ultralytics.com/tasks/pose/)
-  model finds 17 body keypoints; we use the nose, eyes, ears and shoulders.
+* **Keypoints.** An off-the-shelf pose model finds 17 body keypoints:
+  [Ultralytics YOLO pose](https://docs.ultralytics.com/tasks/pose/) by default, or
+  [RTMO](https://github.com/open-mmlab/mmpose/tree/main/projects/rtmo) from OpenMMLab. We use the nose, eyes, ears and shoulders.
 * **Two passes.** Pose models are trained on people who stand or sit. On a baby lying sideways in
   the frame they confidently misplace facial points, ears especially. So the first pass only
   finds the baby and the shoulder line, then the crop is rotated so the head points up and the
@@ -468,9 +472,9 @@ name, rather than at night when the option is first used.
 | `camera.rotate` | `0` | Rotates the picture by 90, 180 or 270 degrees before the analysis. |
 | `camera.roi` | whole frame | The part of the frame with the crib, as fractions `[left, top, right, bottom]`. Everything outside is ignored, so a parent walking by is not taken for the baby. |
 | **detector** | | |
-| `detector.model` | `models/yolo11s-pose.pt` | Which neural network finds the keypoints, see [Models](#models). |
+| `detector.model` | `models/yolo11s-pose.pt` | Which neural network finds the keypoints: a YOLO pose model or RTMO (`rtmo-m`), see [Models](#models). |
 | `detector.device` | `cpu` | Where it runs: `cpu`, `mps` (Apple Silicon GPU) or `0` (first NVIDIA GPU), see [CPU or GPU](#cpu-or-gpu). |
-| `detector.imgsz` | `640` | How detailed a picture the network gets. In an overhead view the head is small, and 1280 finds the face points much more reliably, at the cost of speed. |
+| `detector.imgsz` | `640` | How detailed a picture the network gets. In an overhead view the head is small, and 1280 finds the face points much more reliably, at the cost of speed. An RTMO model always gets a 640 picture, so for it this makes no real difference. |
 | `detector.upright` | `true` | The second pass on a crop with the baby turned head-up. Switch it off only to save CPU. |
 | `detector.min_person_conf` | `0.35` | How sure the pose network must be that it sees a person at all. Lower it if the baby under a blanket or in a sleep sack is often "not visible" while in the crib: `analysis.jsonl` next to the snapshots then has many lines with `baby_unseen`. With the presence check on, an empty crib is not decided by this network, so a low value does not fill it with people. |
 | `detector.upright_person_conf` | `0.1` | The same threshold for the second pass, on the crop with the baby turned head-up. Lower it together with `detector.min_person_conf` if many lines in `analysis.jsonl` say `unchecked`: the first pass found the baby and the second did not. |
@@ -582,6 +586,28 @@ so with higher thresholds it loses more frames: lower both thresholds when you s
 large models take two to three times longer per frame, so the default stays `yolo11s`. You can
 also point `detector.model` at your own fine-tuned file.
 
+### RTMO
+
+[RTMO](https://github.com/open-mmlab/mmpose/tree/main/projects/rtmo) is a pose model from OpenMMLab under Apache-2.0. The program runs it with
+ONNX Runtime instead of Ultralytics. To use it, set
+
+```yaml
+detector:
+  model: rtmo-m
+```
+
+or `rtmo-s`, `rtmo-l`, or a path to an RTMO `.onnx` file. The weights (about 90 MB for `rtmo-m`)
+are downloaded into `models/` on the first run. Both passes, the memory and all the thresholds
+work as with YOLO. On the same frames:
+
+| Model | Person thresholds 0.15 and 0.10 | Person thresholds 0.01 and 0.02 |
+|---|---|---|
+| rtmo-m | 90% / 80% | 90% / 80% |
+
+RTMO-m gave the same answers at both pairs of thresholds and never named the opposite side; when
+it is wrong, it says "not visible" while the face can be seen, or mixes up "straight" with a side.
+It runs on the CPU only (`detector.device` does not apply to it).
+
 ## CPU or GPU
 
 By default the network runs on the **CPU**, which is plenty: the program looks at one frame per
@@ -591,6 +617,7 @@ second. Measured on an Apple M4 Pro, two passes at `imgsz: 1280`:
 |---|---|---|
 | yolo11s-pose | 182 ms per frame | 60 ms per frame |
 | yolo26s-pose | 215 ms per frame | 67 ms per frame |
+| rtmo-m | 120 ms per frame | - |
 
 The results are identical (keypoints differ by less than a pixel), so `device: mps` on Apple Silicon
 simply leaves more CPU free. Trying the remembered crop (see How it works) adds one more pass, about
@@ -614,16 +641,10 @@ uv run pytest
 
 ## License
 
-noggin-compass is free software under the
-[GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0), © 2026 Alexander Kirillov.
+noggin-compass is licensed under the [GNU AGPL-3.0](LICENSE), © 2026 Alexander Kirillov, as
+required by [Ultralytics YOLO](https://github.com/ultralytics/ultralytics), which it is built on.
 
-It is built on [Ultralytics](https://github.com/ultralytics/ultralytics) YOLO, which together
-with its pretrained pose models is licensed under AGPL-3.0, so the whole program follows the same
-terms. You may use, change and share it. If you pass it on, or let other people use your changed
-version over a network, you have to offer them the source code under AGPL-3.0 as well. The
-library is installed and the model is downloaded on your machine; neither is part of this
-repository. See also the [Ultralytics licensing terms](https://www.ultralytics.com/license).
+Other libraries and models:
 
-The presence check uses Google's SigLIP 2 model and Hugging Face Transformers, both under
-Apache-2.0. The thermometers are read with [Bleak](https://github.com/hbldh/bleak), under the MIT
-license.
+* SigLIP 2 by Google, Hugging Face Transformers and the RTMO models by OpenMMLab: Apache-2.0;
+* [ONNX Runtime](https://github.com/microsoft/onnxruntime) and [Bleak](https://github.com/hbldh/bleak): MIT.

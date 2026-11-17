@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from noggin_compass.config import DetectorConfig
-from noggin_compass.pose import Person, PoseDetector, UprightView, body_up, head_of
+from noggin_compass.pose import Person, PoseDetector, UprightView, Yolo, body_up, head_of
 
 
 @pytest.mark.parametrize("angle_deg", [0, 37, 90, 180, 270, -120])
@@ -229,8 +229,9 @@ class _Model:
 
 def detector_seeing(boxes, min_person_area):
     det = object.__new__(PoseDetector)
-    det.model = _Model(boxes)
     det.cfg = DetectorConfig(min_person_conf=0.1, min_person_area=min_person_area)
+    det.network = object.__new__(Yolo)
+    det.network.model, det.network.cfg = _Model(boxes), det.cfg
     return det
 
 
